@@ -1,0 +1,251 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Papel {
+  ALUNO
+  PROFESSOR
+}
+
+enum TipoTrabalho {
+  INDIVIDUAL
+  EQUIPE
+}
+
+enum DonoTipo {
+  ALUNO
+  EQUIPE
+}
+
+enum StatsStatus {
+  PENDENTE
+  CALCULADO
+  ERRO
+}
+
+enum SinalizacaoTipo {
+  DIVERGENCIA_PUSHER_AUTOR
+  SEM_ATIVIDADE
+  FORCE_PUSH
+  COMMIT_GIGANTE
+  AUTOR_NAO_RECONHECIDO
+}
+
+enum SinalizacaoIntensidade {
+  BAIXA
+  MEDIA
+  ALTA
+}
+
+enum SinalizacaoStatus {
+  PENDENTE
+  PROCEDE
+  DESCARTADA
+}
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  github_id    BigInt   @unique
+  github_login String   @unique
+  nome         String
+  papel        Papel
+  matricula    String?
+  criado_em    DateTime @default(now())
+
+  emails            EmailCommit[]
+  matriculas        Matricula[]
+  equipe_membros    EquipeMembro[]
+  repositorios      Repositorio[]
+  revisoes          Sinalizacao[]  @relation("RevisorSinalizacao")
+  commits           Commit[]
+
+  @@map("usuarios")
+}
+
+model EmailCommit {
+  id         Int     @id @default(autoincrement())
+  usuario_id Int
+  email      String  @unique
+  verificado Boolean @default(false)
+
+  usuario    Usuario @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@map("emails_commit")
+}
+
+model Disciplina {
+  id     Int     @id @default(autoincrement())
+  nome   String
+  codigo String  @unique // ex.: ED-2026-2
+
+  turmas Turma[]
+
+  @@map("disciplinas")
+}
+
+model Turma {
+  id            Int      @id @default(autoincrement())
+  disciplina_id Int
+  nome          String // ex.: Subturma A
+  periodo       String // ex.: 2026.2
+
+  disciplina    Disciplina @relation(fields: [disciplina_id], references: [id], onDelete: Cascade)
+  matriculas    Matricula[]
+  trabalhos     Trabalho[]
+
+  @@map("turmas")
+}
+
+model Matricula {
+  usuario_id Int
+  turma_id   Int
+
+  usuario    Usuario @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+  turma      Turma   @relation(fields: [turma_id], references: [id], onDelete: Cascade)
+
+  @@id([usuario_id, turma_id])
+  @@map("matriculas")
+}
+
+model Trabalho {
+  id                    Int          @id @default(autoincrement())
+  turma_id              Int
+  titulo                String
+  descricao_md          String
+  slug                  String       @unique
+  tipo                  TipoTrabalho
+  template_repo         String // owner/nome
+  janela_inicio         DateTime
+  deadline              DateTime
+  congelamento_automatico Boolean     @default(true)
+  criado_em             DateTime     @default(now())
+
+  turma                 Turma        @relation(fields: [turma_id], references: [id], onDelete: Cascade)
+  equipes               Equipe[]
+  repositorios          Repositorio[]
+  entregas              Entrega[]
+
+  @@map("trabalhos")
+}
+
+model Equipe {
+  id          Int      @id @default(autoincrement())
+  trabalho_id Int
+  nome        String
+
+  trabalho    Trabalho @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  membros     EquipeMembro[]
+  repositorios Repositorio[]
+
+  @@map("equipes")
+}
+
+model EquipeMembro {
+  equipe_id  Int
+  usuario_id Int
+
+  equipe     Equipe  @relation(fields: [equipe_id], references: [id], onDelete: Cascade)
+  usuario    Usuario @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@id([equipe_id, usuario_id])
+  @@map("equipe_membros")
+}
+
+model Repositorio {
+  id             Int      @id @default(autoincrement())
+  trabalho_id    Int
+  dono_tipo      DonoTipo
+  usuario_id     Int?
+  equipe_id      Int?
+  github_repo_id BigInt   @unique
+  nome_completo  String   // org/nome
+  criado_em      DateTime @default(now())
+
+  trabalho       Trabalho  @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  usuario        Usuario?  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+  equipe         Equipe?   @relation(fields: [equipe_id], references: [id], onDelete: Cascade)
+  pushes         Push[]
+  commits        Commit[]
+  entregas       Entrega[]
+  sinalizacoes   Sinalizacao[]
+
+  @@map("repositorios")
+}
+
+model Push {
+  id               Int      @id @default(autoincrement())
+  repositorio_id   Int
+  pusher_github_id BigInt
+  pusher_login     String
+  forced           Boolean  @default(false)
+  recebido_em      DateTime @default(now())
+  ref              String
+  github_delivery_id String  @unique
+
+  repositorio      Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  commits          Commit[]
+
+  @@index([repositorio_id, recebido_em])
+  @@map("pushes")
+}
+
+model Commit {
+  id               Int      @id @default(autoincrement())
+  push_id          Int
+  repositorio_id   Int
+  sha              String
+  mensagem         String
+  autor_nome       String
+  autor_email      String
+  autor_usuario_id Int?
+  committed_em     DateTime
+  additions        Int?
+  deletions        Int?
+  stats_status     StatsStatus @default(PENDENTE)
+
+  push             Push        @relation(fields: [push_id], references: [id], onDelete: Cascade)
+  repositorio      Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  autor_usuario    Usuario?    @relation(fields: [autor_usuario_id], references: [id], onDelete: SetNull)
+
+  @@unique([repositorio_id, sha])
+  @@index([repositorio_id, committed_em])
+  @@map("commits")
+}
+
+model Entrega {
+  id             Int      @id @default(autoincrement())
+  repositorio_id Int
+  trabalho_id    Int
+  sha_congelado  String
+  tag            String   // ex.: entrega-1
+  congelado_em   DateTime @default(now())
+
+  repositorio    Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  trabalho       Trabalho    @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+
+  @@map("entregas")
+}
+
+model Sinalizacao {
+  id             Int                    @id @default(autoincrement())
+  repositorio_id Int
+  tipo           SinalizacaoTipo
+  intensidade    SinalizacaoIntensidade
+  evidencia_json Json
+  status         SinalizacaoStatus      @default(PENDENTE)
+  nota_revisao   String?
+  revisado_por   Int?
+  detectado_em   DateTime               @default(now())
+  revisado_em    DateTime?
+
+  repositorio    Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  revisor        Usuario?    @relation("RevisorSinalizacao", fields: [revisado_por], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("sinalizacoes")
+}
