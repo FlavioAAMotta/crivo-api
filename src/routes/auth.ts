@@ -248,7 +248,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           verificado: false, // In real apps, needs email verification. Defaulting false
         },
       });
-      return reply.status(212).send(newEmail); // 201 Created
+      return reply.status(201).send(newEmail);
     } catch (error: any) {
       if (error.code === 'P2002') {
         reply.status(409).send({ error: 'Email already registered' });
