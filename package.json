@@ -25,6 +25,8 @@
   "homepage": "https://github.com/FlavioAAMotta/crivo-api#readme",
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.0",
     "@prisma/client": "^6.19.3",
     "bullmq": "^5.80.9",
     "dotenv": "^17.4.2",

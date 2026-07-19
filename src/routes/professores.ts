@@ -7,29 +7,97 @@ import { getRepositoryMetrics } from '../services/metrics.js';
 import { runCongelador } from '../jobs/congelador.js';
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
+import { docSchema } from '../lib/openapi.js';
+
+const criarDisciplinaBodySchema = z.object({
+  nome: z.string().min(3),
+  codigo: z.string().min(2),
+});
+
+const criarTurmaBodySchema = z.object({
+  disciplina_id: z.number(),
+  nome: z.string().min(2),
+  periodo: z.string().min(4),
+});
+
+const turmaIdParamsSchema = z.object({ id: z.string().transform(Number) });
+
+const importarMatriculasBodySchema = z.object({
+  matriculas: z.array(
+    z.object({
+      github_login: z.string().min(1),
+      nome: z.string().optional(),
+      matricula: z.string().optional(),
+      email: z.string().email().optional(),
+    })
+  ),
+});
+
+const criarTrabalhoBodySchema = z.object({
+  turma_id: z.number(),
+  titulo: z.string().min(3),
+  descricao_md: z.string(),
+  slug: z.string().min(2),
+  tipo: z.enum(['INDIVIDUAL', 'EQUIPE']),
+  template_repo: z.string().includes('/'), // format owner/repo
+  janela_inicio: z.string().transform(d => new Date(d)),
+  deadline: z.string().transform(d => new Date(d)),
+  congelamento_automatico: z.boolean().default(true),
+});
+
+const gradeQuerySchema = z.object({ trabalho_id: z.string().transform(Number) });
+
+const repositorioIdParamsSchema = z.object({ id: z.string().transform(Number) });
+
+const sinalizacoesQuerySchema = z.object({
+  status: z.enum(['PENDENTE', 'PROCEDE', 'DESCARTADA']).optional(),
+  tipo: z.enum(['DIVERGENCIA_PUSHER_AUTOR', 'SEM_ATIVIDADE', 'FORCE_PUSH', 'COMMIT_GIGANTE', 'AUTOR_NAO_RECONHECIDO']).optional(),
+  turma_id: z.string().transform(Number).optional(),
+});
+
+const sinalizacaoIdParamsSchema = z.object({ id: z.string().transform(Number) });
+
+const revisarSinalizacaoBodySchema = z.object({
+  status: z.enum(['PROCEDE', 'DESCARTADA']),
+  nota_revisao: z.string().min(5), // mandatory comment
+});
+
+const trabalhoIdParamsSchema = z.object({ id: z.string().transform(Number) });
+
+const AUTH_SECURITY: Record<string, string[]>[] = [{ cookieAuth: [] }, { bearerAuth: [] }];
 
 export async function professorRoutes(fastify: FastifyInstance) {
-  
+
   // Apply requireProfessor middleware to all professor routes
   fastify.addHook('preHandler', requireProfessor);
 
   // ==========================================
   // 1. CRUD Disciplinas
   // ==========================================
-  
-  fastify.get('/prof/disciplinas', async (request, reply) => {
+
+  fastify.get('/prof/disciplinas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista todas as disciplinas',
+      security: AUTH_SECURITY,
+    },
+  }, async (request, reply) => {
     const list = await prisma.disciplina.findMany({
       include: { turmas: true },
     });
     return reply.send(list);
   });
 
-  fastify.post('/prof/disciplinas', async (request, reply) => {
-    const schema = z.object({
-      nome: z.string().min(3),
-      codigo: z.string().min(2),
-    });
-    
+  fastify.post('/prof/disciplinas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Cria uma disciplina',
+      security: AUTH_SECURITY,
+      body: docSchema(criarDisciplinaBodySchema),
+    },
+  }, async (request, reply) => {
+    const schema = criarDisciplinaBodySchema;
+
     const parsed = schema.parse(request.body);
     try {
       const created = await prisma.disciplina.create({ data: parsed });
@@ -47,20 +115,29 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 2. CRUD Turmas
   // ==========================================
 
-  fastify.get('/prof/turmas', async (request, reply) => {
+  fastify.get('/prof/turmas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista todas as turmas',
+      security: AUTH_SECURITY,
+    },
+  }, async (request, reply) => {
     const list = await prisma.turma.findMany({
       include: { disciplina: true },
     });
     return reply.send(list);
   });
 
-  fastify.post('/prof/turmas', async (request, reply) => {
-    const schema = z.object({
-      disciplina_id: z.number(),
-      nome: z.string().min(2),
-      periodo: z.string().min(4),
-    });
-    
+  fastify.post('/prof/turmas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Cria uma turma',
+      security: AUTH_SECURITY,
+      body: docSchema(criarTurmaBodySchema),
+    },
+  }, async (request, reply) => {
+    const schema = criarTurmaBodySchema;
+
     const parsed = schema.parse(request.body);
     const created = await prisma.turma.create({ data: parsed });
     return reply.status(201).send(created);
@@ -70,19 +147,18 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 3. CRUD Matriculas & Import
   // ==========================================
 
-  fastify.post('/prof/turmas/:id/matriculas', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.string().transform(Number) });
-    const bodySchema = z.object({
-      matriculas: z.array(
-        z.object({
-          github_login: z.string().min(1),
-          nome: z.string().optional(),
-          matricula: z.string().optional(),
-          email: z.string().email().optional(),
-        })
-      ),
-    });
-    
+  fastify.post('/prof/turmas/:id/matriculas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Importa matrículas de alunos em uma turma a partir de logins do GitHub',
+      security: AUTH_SECURITY,
+      params: docSchema(turmaIdParamsSchema),
+      body: docSchema(importarMatriculasBodySchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = turmaIdParamsSchema;
+    const bodySchema = importarMatriculasBodySchema;
+
     const { id: turmaId } = paramsSchema.parse(request.params);
     const { matriculas } = bodySchema.parse(request.body);
     
@@ -157,26 +233,29 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 4. CRUD Trabalhos
   // ==========================================
 
-  fastify.get('/prof/trabalhos', async (request, reply) => {
+  fastify.get('/prof/trabalhos', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista todos os trabalhos',
+      security: AUTH_SECURITY,
+    },
+  }, async (request, reply) => {
     const list = await prisma.trabalho.findMany({
       include: { turma: true },
     });
     return reply.send(list);
   });
 
-  fastify.post('/prof/trabalhos', async (request, reply) => {
-    const schema = z.object({
-      turma_id: z.number(),
-      titulo: z.string().min(3),
-      descricao_md: z.string(),
-      slug: z.string().min(2),
-      tipo: z.enum(['INDIVIDUAL', 'EQUIPE']),
-      template_repo: z.string().includes('/'), // format owner/repo
-      janela_inicio: z.string().transform(d => new Date(d)),
-      deadline: z.string().transform(d => new Date(d)),
-      congelamento_automatico: z.boolean().default(true),
-    });
-    
+  fastify.post('/prof/trabalhos', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Cria um trabalho, validando o repositório template no GitHub',
+      security: AUTH_SECURITY,
+      body: docSchema(criarTrabalhoBodySchema),
+    },
+  }, async (request, reply) => {
+    const schema = criarTrabalhoBodySchema;
+
     const parsed = schema.parse(request.body);
     
     // Validate template repo exists on GitHub
@@ -208,10 +287,18 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 5. GET /prof/turmas/:id/grade?trabalho_id=
   // ==========================================
 
-  fastify.get('/prof/turmas/:id/grade', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.string().transform(Number) });
-    const querySchema = z.object({ trabalho_id: z.string().transform(Number) });
-    
+  fastify.get('/prof/turmas/:id/grade', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Retorna a grade (status de entrega) de um trabalho em uma turma',
+      security: AUTH_SECURITY,
+      params: docSchema(turmaIdParamsSchema),
+      querystring: docSchema(gradeQuerySchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = turmaIdParamsSchema;
+    const querySchema = gradeQuerySchema;
+
     const { id: turmaId } = paramsSchema.parse(request.params);
     const { trabalho_id: trabalhoId } = querySchema.parse(request.query);
     
@@ -347,8 +434,15 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 6. GET /prof/repositorios/:id
   // ==========================================
 
-  fastify.get('/prof/repositorios/:id', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.string().transform(Number) });
+  fastify.get('/prof/repositorios/:id', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Retorna as métricas de um repositório',
+      security: AUTH_SECURITY,
+      params: docSchema(repositorioIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = repositorioIdParamsSchema;
     const { id: repoId } = paramsSchema.parse(request.params);
     
     try {
@@ -363,13 +457,16 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 7. GET & PATCH /prof/sinalizacoes
   // ==========================================
 
-  fastify.get('/prof/sinalizacoes', async (request, reply) => {
-    const querySchema = z.object({
-      status: z.enum(['PENDENTE', 'PROCEDE', 'DESCARTADA']).optional(),
-      tipo: z.enum(['DIVERGENCIA_PUSHER_AUTOR', 'SEM_ATIVIDADE', 'FORCE_PUSH', 'COMMIT_GIGANTE', 'AUTOR_NAO_RECONHECIDO']).optional(),
-      turma_id: z.string().transform(Number).optional(),
-    });
-    
+  fastify.get('/prof/sinalizacoes', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista sinalizações de integridade, com filtros opcionais',
+      security: AUTH_SECURITY,
+      querystring: docSchema(sinalizacoesQuerySchema),
+    },
+  }, async (request, reply) => {
+    const querySchema = sinalizacoesQuerySchema;
+
     const filters = querySchema.parse(request.query);
     const whereClause: any = {};
     
@@ -395,13 +492,18 @@ export async function professorRoutes(fastify: FastifyInstance) {
     return reply.send(serializeBigInt(list));
   });
 
-  fastify.patch('/prof/sinalizacoes/:id', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.string().transform(Number) });
-    const bodySchema = z.object({
-      status: z.enum(['PROCEDE', 'DESCARTADA']),
-      nota_revisao: z.string().min(5), // mandatory comment
-    });
-    
+  fastify.patch('/prof/sinalizacoes/:id', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Revisa (aprova/descarta) uma sinalização pendente',
+      security: AUTH_SECURITY,
+      params: docSchema(sinalizacaoIdParamsSchema),
+      body: docSchema(revisarSinalizacaoBodySchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = sinalizacaoIdParamsSchema;
+    const bodySchema = revisarSinalizacaoBodySchema;
+
     const { id: signalId } = paramsSchema.parse(request.params);
     const { status, nota_revisao } = bodySchema.parse(request.body);
     
@@ -437,8 +539,15 @@ export async function professorRoutes(fastify: FastifyInstance) {
   // 8. POST /prof/trabalhos/:id/congelar
   // ==========================================
 
-  fastify.post('/prof/trabalhos/:id/congelar', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.string().transform(Number) });
+  fastify.post('/prof/trabalhos/:id/congelar', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Força o congelamento imediato dos repositórios de um trabalho',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = trabalhoIdParamsSchema;
     const { id: trabalhoId } = paramsSchema.parse(request.params);
     
     const trabalho = await prisma.trabalho.findUnique({

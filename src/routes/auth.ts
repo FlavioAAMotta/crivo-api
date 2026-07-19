@@ -5,11 +5,30 @@ import { config } from '../lib/config.js';
 import { signToken, requireAuth } from '../lib/auth.js';
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
+import { docSchema } from '../lib/openapi.js';
+
+const callbackQuerySchema = z.object({
+  code: z.string(),
+});
+
+const postEmailBodySchema = z.object({
+  email: z.string().email(),
+});
+
+const deleteEmailParamsSchema = z.object({
+  id: z.string().transform(Number),
+});
 
 export async function authRoutes(fastify: FastifyInstance) {
-  
+
   // 1. Redirect to GitHub OAuth Authorization Page
-  fastify.get('/auth/github', async (request, reply) => {
+  fastify.get('/auth/github', {
+    schema: {
+      tags: ['auth'],
+      summary: 'Inicia o fluxo de OAuth com o GitHub',
+      description: 'Redireciona o usuário para a página de autorização do GitHub.',
+    },
+  }, async (request, reply) => {
     const clientId = config.GITHUB_OAUTH_CLIENT_ID;
     const redirectUri = `${config.APP_BASE_URL}/auth/github/callback`;
     const oauthUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email`;
@@ -18,11 +37,16 @@ export async function authRoutes(fastify: FastifyInstance) {
   });
 
   // 2. OAuth Callback Handler
-  fastify.get('/auth/github/callback', async (request, reply) => {
-    const querySchema = z.object({
-      code: z.string(),
-    });
-    
+  fastify.get('/auth/github/callback', {
+    schema: {
+      tags: ['auth'],
+      summary: 'Callback do OAuth do GitHub',
+      description: 'Troca o código de autorização por um token, cria/atualiza o usuário e retorna um JWT.',
+      querystring: docSchema(callbackQuerySchema),
+    },
+  }, async (request, reply) => {
+    const querySchema = callbackQuerySchema;
+
     const parseResult = querySchema.safeParse(request.query);
     if (!parseResult.success) {
       reply.status(400).send({ error: 'OAuth code missing' });
@@ -159,7 +183,14 @@ export async function authRoutes(fastify: FastifyInstance) {
   });
 
   // 3. Get profile /me
-  fastify.get('/me', { preHandler: [requireAuth] }, async (request, reply) => {
+  fastify.get('/me', {
+    preHandler: [requireAuth],
+    schema: {
+      tags: ['auth'],
+      summary: 'Retorna o perfil do usuário autenticado',
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
     const user = await prisma.usuario.findUnique({
       where: { id: request.user!.id },
       include: {
@@ -176,18 +207,31 @@ export async function authRoutes(fastify: FastifyInstance) {
   });
 
   // 4. Manage Emails for Commit Matching
-  fastify.get('/me/emails', { preHandler: [requireAuth] }, async (request, reply) => {
+  fastify.get('/me/emails', {
+    preHandler: [requireAuth],
+    schema: {
+      tags: ['auth'],
+      summary: 'Lista os e-mails de commit vinculados ao usuário autenticado',
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
     const emails = await prisma.emailCommit.findMany({
       where: { usuario_id: request.user!.id },
     });
     return reply.send(emails);
   });
 
-  fastify.post('/me/emails', { preHandler: [requireAuth] }, async (request, reply) => {
-    const bodySchema = z.object({
-      email: z.string().email(),
-    });
-    
+  fastify.post('/me/emails', {
+    preHandler: [requireAuth],
+    schema: {
+      tags: ['auth'],
+      summary: 'Adiciona um e-mail de commit ao usuário autenticado',
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }],
+      body: docSchema(postEmailBodySchema),
+    },
+  }, async (request, reply) => {
+    const bodySchema = postEmailBodySchema;
+
     const parseResult = bodySchema.safeParse(request.body);
     if (!parseResult.success) {
       reply.status(400).send({ error: parseResult.error.message });
@@ -214,11 +258,17 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.delete('/me/emails/:id', { preHandler: [requireAuth] }, async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    
+  fastify.delete('/me/emails/:id', {
+    preHandler: [requireAuth],
+    schema: {
+      tags: ['auth'],
+      summary: 'Remove um e-mail de commit do usuário autenticado',
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }],
+      params: docSchema(deleteEmailParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = deleteEmailParamsSchema;
+
     const parseResult = paramsSchema.safeParse(request.params);
     if (!parseResult.success) {
       reply.status(400).send({ error: 'Invalid email ID' });

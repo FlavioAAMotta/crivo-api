@@ -6,14 +6,43 @@ import { createRepositoryForStudent, createRepositoryForTeam } from '../services
 import { createTeam, addTeamMember } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
 import { serializeBigInt } from '../lib/serializer.js';
+import { docSchema } from '../lib/openapi.js';
+
+const trabalhoIdParamsSchema = z.object({
+  id: z.string().transform(Number),
+});
+
+const criarEquipeBodySchema = z.object({
+  nome: z.string().min(2).max(100),
+});
+
+const equipeIdParamsSchema = z.object({
+  id: z.string().transform(Number),
+});
+
+const addMembroBodySchema = z.object({
+  usuario_id: z.number(),
+});
+
+const repositorioIdParamsSchema = z.object({
+  id: z.string().transform(Number),
+});
+
+const AUTH_SECURITY: Record<string, string[]>[] = [{ cookieAuth: [] }, { bearerAuth: [] }];
 
 export async function alunoRoutes(fastify: FastifyInstance) {
-  
+
   // Apply requireAuth middleware to all aluno routes
   fastify.addHook('preHandler', requireAuth);
 
   // 1. List classes and works with their status
-  fastify.get('/me/turmas', async (request, reply) => {
+  fastify.get('/me/turmas', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Lista as turmas do aluno autenticado com o status dos trabalhos',
+      security: AUTH_SECURITY,
+    },
+  }, async (request, reply) => {
     const requesterId = request.user!.id;
 
     // Database repo query helper to optimize nested async lookups
@@ -149,11 +178,16 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   });
 
   // 2. POST /trabalhos/:id/repositorio -> creates repo for the student
-  fastify.post('/trabalhos/:id/repositorio', async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    
+  fastify.post('/trabalhos/:id/repositorio', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Cria o repositório do aluno para um trabalho individual',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = trabalhoIdParamsSchema;
+
     const parseResult = paramsSchema.safeParse(request.params);
     if (!parseResult.success) {
       reply.status(400).send({ error: 'Invalid trabalho ID' });
@@ -172,14 +206,18 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   });
 
   // 3. POST /trabalhos/:id/equipes { nome } -> creates team for a work
-  fastify.post('/trabalhos/:id/equipes', async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    const bodySchema = z.object({
-      nome: z.string().min(2).max(100),
-    });
-    
+  fastify.post('/trabalhos/:id/equipes', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Cria uma equipe para um trabalho em grupo',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+      body: docSchema(criarEquipeBodySchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = trabalhoIdParamsSchema;
+    const bodySchema = criarEquipeBodySchema;
+
     const paramsParse = paramsSchema.safeParse(request.params);
     const bodyParse = bodySchema.safeParse(request.body);
     
@@ -201,14 +239,18 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   });
 
   // 4. POST /equipes/:id/membros { usuario_id } -> adds a member
-  fastify.post('/equipes/:id/membros', async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    const bodySchema = z.object({
-      usuario_id: z.number(),
-    });
-    
+  fastify.post('/equipes/:id/membros', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Adiciona um membro a uma equipe',
+      security: AUTH_SECURITY,
+      params: docSchema(equipeIdParamsSchema),
+      body: docSchema(addMembroBodySchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = equipeIdParamsSchema;
+    const bodySchema = addMembroBodySchema;
+
     const paramsParse = paramsSchema.safeParse(request.params);
     const bodyParse = bodySchema.safeParse(request.body);
     
@@ -230,11 +272,16 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   });
 
   // 5. POST /equipes/:id/repositorio -> creates repo for the team
-  fastify.post('/equipes/:id/repositorio', async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    
+  fastify.post('/equipes/:id/repositorio', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Cria o repositório de uma equipe',
+      security: AUTH_SECURITY,
+      params: docSchema(equipeIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = equipeIdParamsSchema;
+
     const paramsParse = paramsSchema.safeParse(request.params);
     if (!paramsParse.success) {
       reply.status(400).send({ error: 'Invalid team ID' });
@@ -273,11 +320,16 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   });
 
   // 6. GET /me/repositorios/:id/metricas -> LGPD route to see own metrics
-  fastify.get('/me/repositorios/:id/metricas', async (request, reply) => {
-    const paramsSchema = z.object({
-      id: z.string().transform(Number),
-    });
-    
+  fastify.get('/me/repositorios/:id/metricas', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Retorna as métricas do repositório do próprio aluno/equipe (LGPD)',
+      security: AUTH_SECURITY,
+      params: docSchema(repositorioIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = repositorioIdParamsSchema;
+
     const paramsParse = paramsSchema.safeParse(request.params);
     if (!paramsParse.success) {
       reply.status(400).send({ error: 'Invalid repository ID' });

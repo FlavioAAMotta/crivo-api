@@ -43,7 +43,13 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/webhooks/github', async (request, reply) => {
+  fastify.post('/webhooks/github', {
+    schema: {
+      tags: ['webhooks'],
+      summary: 'Recebe eventos de webhook do GitHub (push, ping)',
+      description: 'Requer o header `X-Hub-Signature-256` com a assinatura HMAC-SHA256 do payload, validada contra GITHUB_WEBHOOK_SECRET.',
+    },
+  }, async (request, reply) => {
     const signature = request.headers['x-hub-signature-256'] as string;
     const rawBody = (request as any).rawBody as Buffer;
     
