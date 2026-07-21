@@ -8,6 +8,14 @@ Crivo is an academic-integrity monitoring API for GitHub-based coursework. Profe
 
 Domain language (schema, routes, and variables) is **Portuguese**: `usuario`, `disciplina`, `turma`, `matricula`, `trabalho`, `equipe`, `repositorio`, `push`, `commit`, `entrega` (frozen delivery), `sinalizacao` (anomaly flag). Keep new code in the same language rather than mixing English domain terms.
 
+## Documentation map
+
+Three documents, three readers — do not duplicate content across them:
+
+- `CLAUDE.md` (this file): how the code works and its conventions. For coding sessions.
+- `docs/OPERACAO.md`: runbook — where org/App/Railway live, env vars and where to re-obtain each secret, semester routine, the 12-step smoke test, known errors with fixes. For operating the system.
+- `docs/DECISOES.md`: architectural decision records (D1–D13) — the *why* behind App-not-PAT, pusher-vs-author, repo-per-trabalho, signals-never-punish, two processes, BullMQ with the pg-boss exit, and more. **Read the relevant entry before proposing any architectural change; do not "improve" the system against a recorded decision without flagging the conflict explicitly.**
+
 ## Commands
 
 ```bash
@@ -72,6 +80,7 @@ Produção roda **dois processos a partir do mesmo código**:
 - **GitHub calls** go through `getInstallationOctokit()` (installation id cached per process) wrapped in `withGithubRetry()` for 403/429/5xx backoff — use both rather than calling Octokit directly.
 - **Repo creation** (`src/services/repo.ts`) generates from the trabalho's `template_repo`, then polls up to ~20s for the `main` branch to materialize before adding collaborators and enabling branch protection.
 - **Config has permissive defaults** (mock secrets, localhost URLs) so tests and dev boot without a `.env`; see `.env.example` for the real set.
+- **Architecture changes**: check `docs/DECISOES.md` first — several "obvious improvements" (PAT instead of App, per-discipline repos, auto-grading from metrics, dropping the worker split) were deliberately rejected with reasons.
 
 ## Tests
 
