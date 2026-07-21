@@ -70,7 +70,7 @@ Produção roda **dois processos a partir do mesmo código**:
 - **Auth.** `requireAuth` / `requireProfessor` in `src/lib/auth.ts`; the token is read from the `token` httpOnly cookie, falling back to `Authorization: Bearer`. `src/routes/alunos.ts` and `src/routes/professores.ts` apply their guard with a plugin-wide `addHook('preHandler', …)`, so every route in those files is protected by default. `src/routes/auth.ts` attaches `preHandler` per route instead.
 - **Role assignment** happens at OAuth callback from `PROFESSOR_LOGINS` (comma-separated logins, lowercased). Rule: promote ALUNO→PROFESSOR, never demote.
 - **GitHub calls** go through `getInstallationOctokit()` (installation id cached per process) wrapped in `withGithubRetry()` for 403/429/5xx backoff — use both rather than calling Octokit directly.
-- **Repo creation** (`src/services/repo.ts`) generates from the trabalho's `template_repo`, then polls up to ~20s for the `main` branch to materialize before adding collaborators and enabling branch protection. Post-creation failures are logged, not fatal — the DB row is still written.
+- **Repo creation** (`src/services/repo.ts`) generates from the trabalho's `template_repo`, then polls up to ~20s for the `main` branch to materialize before adding collaborators and enabling branch protection.
 - **Config has permissive defaults** (mock secrets, localhost URLs) so tests and dev boot without a `.env`; see `.env.example` for the real set.
 
 ## Tests
