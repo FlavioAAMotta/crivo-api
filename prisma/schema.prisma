@@ -28,6 +28,12 @@ enum StatsStatus {
   ERRO
 }
 
+enum RepoSetupStatus {
+  PENDENTE
+  CONFIGURADO
+  ERRO
+}
+
 enum SinalizacaoTipo {
   DIVERGENCIA_PUSHER_AUTOR
   SEM_ATIVIDADE
@@ -165,6 +171,12 @@ model Repositorio {
   github_repo_id BigInt   @unique
   nome_completo  String   // org/nome
   criado_em      DateTime @default(now())
+
+  // Estado da sequência pós-criação (colaboradores + proteção de branch).
+  // ERRO fica visível ao professor no dashboard quando os retries se esgotam.
+  setup_status     RepoSetupStatus @default(PENDENTE)
+  setup_erro       String?
+  setup_tentativas Int             @default(0)
 
   trabalho       Trabalho  @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
   usuario        Usuario?  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)

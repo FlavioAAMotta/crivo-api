@@ -2,14 +2,29 @@ import { App } from 'octokit';
 import { config } from './config.js';
 import { logger } from './logger.js';
 
-export const githubApp = new App({
-  appId: config.GITHUB_APP_ID,
-  privateKey: config.GITHUB_PRIVATE_KEY,
-  oauth: {
-    clientId: config.GITHUB_OAUTH_CLIENT_ID,
-    clientSecret: config.GITHUB_OAUTH_CLIENT_SECRET,
-  },
-});
+let appInstance: App | null = null;
+
+/**
+ * Constrói o App sob demanda. Criar no import quebra qualquer módulo que apenas
+ * importe este arquivo sem falar com o GitHub (rotas, testes) quando
+ * GITHUB_PRIVATE_KEY não está configurada — o construtor exige a chave.
+ */
+export function getGithubApp(): App {
+  if (!appInstance) {
+    if (!config.GITHUB_PRIVATE_KEY) {
+      throw new Error('GITHUB_PRIVATE_KEY is not configured');
+    }
+    appInstance = new App({
+      appId: config.GITHUB_APP_ID,
+      privateKey: config.GITHUB_PRIVATE_KEY,
+      oauth: {
+        clientId: config.GITHUB_OAUTH_CLIENT_ID,
+        clientSecret: config.GITHUB_OAUTH_CLIENT_SECRET,
+      },
+    });
+  }
+  return appInstance;
+}
 
 let cachedInstallationId: number | null = null;
 
@@ -18,6 +33,8 @@ let cachedInstallationId: number | null = null;
  * mapped to the specified GITHUB_ORG.
  */
 export async function getInstallationOctokit() {
+  const githubApp = getGithubApp();
+
   if (cachedInstallationId) {
     return githubApp.getInstallationOctokit(cachedInstallationId);
   }

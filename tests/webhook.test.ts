@@ -91,6 +91,48 @@ describe('POST /webhooks/github', () => {
     expect(response.statusCode).toBe(401);
   });
 
+  // Regressão: se a verificação passasse a rodar sobre JSON.stringify(request.body) em vez
+  // do buffer cru, qualquer diferença de formatação preservada pelo GitHub (espaços, ordem,
+  // escapes unicode) quebraria assinaturas legítimas — e, pior, um payload reserializado
+  // por um proxy passaria a validar. O teste fixa que a conta é feita sobre os bytes recebidos.
+  it('verifica o HMAC sobre o raw body: payload reserializado falha a assinatura', async () => {
+    // Bytes que o "GitHub" enviou e sobre os quais a assinatura foi calculada.
+    const rawPayload = '{"zen":  "Hello",\n  "hook_id": 42}';
+    const signature = getSignature(rawPayload);
+
+    // Mesmo objeto, serialização diferente (é o que JSON.parse -> JSON.stringify produz).
+    const reserialized = JSON.stringify(JSON.parse(rawPayload));
+    expect(reserialized).not.toBe(rawPayload);
+
+    // O raw body original valida.
+    const original = await app.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': signature,
+        'x-github-event': 'ping',
+        'x-github-delivery': 'raw-body-1',
+      },
+      payload: rawPayload,
+    });
+    expect(original.statusCode).toBe(200);
+
+    // O payload reserializado, com a MESMA assinatura, deve ser rejeitado.
+    const tampered = await app.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': signature,
+        'x-github-event': 'ping',
+        'x-github-delivery': 'raw-body-2',
+      },
+      payload: reserialized,
+    });
+    expect(tampered.statusCode).toBe(401);
+  });
+
   it('should return 200 on ping event with valid signature', async () => {
     const payload = JSON.stringify({ zen: 'Hello' });
     const response = await app.inject({
