@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
+import { enqueueRepoSetupJob } from '../jobs/queues.js';
 
 /**
  * Sanitizes and normalizes strings to make them safe for GitHub repository names.
@@ -18,15 +19,17 @@ export function sanitizeRepoName(name: string): string {
  * Executes the post-creation sequence for a generated repository with polling retries.
  * Polling checks if the template contents have been fully populated (so 'main' branch exists),
  * then applies branch protection and adds the student(s) as push collaborator(s).
+ *
+ * Lança em caso de falha — quem chama (o worker `repo-setup`) cuida do retry.
  */
 async function runPostCreationSequence(repoName: string, studentLogins: string[]) {
   const octokit = await getInstallationOctokit();
   const org = config.GITHUB_ORG;
-  
+
   let mainBranchExists = false;
-  const maxPollAttempts = 10;
-  const pollIntervalMs = 2000;
-  
+  const maxPollAttempts = config.repoSetup.pollAttempts;
+  const pollIntervalMs = config.repoSetup.pollIntervalMs;
+
   logger.info({ repoName }, 'Starting post-creation sequence polling for branch main');
   
   for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
@@ -83,6 +86,61 @@ async function runPostCreationSequence(repoName: string, studentLogins: string[]
   );
   
   logger.info({ repoName }, 'Post-creation sequence completed successfully');
+}
+
+/**
+ * Configura um repositório já criado: aguarda a branch main, adiciona colaboradores e
+ * aplica branch protection. Em sucesso marca CONFIGURADO; em falha propaga o erro para
+ * o worker decidir entre novo retry e marcar ERRO (ver markRepoSetupFailed).
+ */
+export async function configureRepository(repoId: number) {
+  const repo = await prisma.repositorio.findUnique({
+    where: { id: repoId },
+    include: {
+      usuario: true,
+      equipe: {
+        include: {
+          membros: { include: { usuario: true } },
+        },
+      },
+    },
+  });
+
+  if (!repo) {
+    throw new Error(`Repository ${repoId} not found`);
+  }
+
+  const repoNameOnly = repo.nome_completo.split('/')[1];
+  const studentLogins = repo.dono_tipo === 'ALUNO'
+    ? (repo.usuario ? [repo.usuario.github_login] : [])
+    : repo.equipe?.membros.map((m) => m.usuario.github_login) ?? [];
+
+  await prisma.repositorio.update({
+    where: { id: repoId },
+    data: { setup_tentativas: { increment: 1 } },
+  });
+
+  await runPostCreationSequence(repoNameOnly, studentLogins);
+
+  await prisma.repositorio.update({
+    where: { id: repoId },
+    data: { setup_status: 'CONFIGURADO', setup_erro: null },
+  });
+
+  logger.info({ repoId, repoName: repo.nome_completo }, 'Repository setup completed');
+}
+
+/**
+ * Marca o repositório como ERRO após esgotar os retries, deixando a causa visível
+ * para o professor no dashboard.
+ */
+export async function markRepoSetupFailed(repoId: number, message: string) {
+  await prisma.repositorio.update({
+    where: { id: repoId },
+    data: { setup_status: 'ERRO', setup_erro: message.slice(0, 500) },
+  }).catch((err) => {
+    logger.error({ err, repoId }, 'Failed to persist repo setup ERRO status');
+  });
 }
 
 /**
@@ -152,7 +210,7 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
   let githubRepo;
   try {
     const response = await withGithubRetry(() =>
-      octokit.rest.repos.generate({
+      octokit.rest.repos.createUsingTemplate({
         template_owner: templateOwner,
         template_repo: templateRepo,
         owner: config.GITHUB_ORG,
@@ -167,14 +225,6 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
     throw new Error(`Failed to generate repository on GitHub: ${error.message}`);
   }
   
-  // Run the asynchronous post-creation setup (wait for main, set protection, add collaborator)
-  try {
-    await runPostCreationSequence(repoName, [user.github_login]);
-  } catch (err: any) {
-    logger.error({ err, repoName }, 'Post-creation configuration sequence failed');
-    // We do not delete the repo, but log the error so the teacher can debug.
-  }
-  
   // Persist repository in Database
   const dbRepo = await prisma.repositorio.create({
     data: {
@@ -185,7 +235,11 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
       nome_completo: fullName,
     },
   });
-  
+
+  // A configuração roda no worker, com retry e backoff: o template ainda pode estar
+  // sendo populado pelo GitHub neste instante.
+  await enqueueRepoSetupJob(dbRepo.id);
+
   return dbRepo;
 }
 
@@ -257,7 +311,7 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   let githubRepo;
   try {
     const response = await withGithubRetry(() =>
-      octokit.rest.repos.generate({
+      octokit.rest.repos.createUsingTemplate({
         template_owner: templateOwner,
         template_repo: templateRepo,
         owner: config.GITHUB_ORG,
@@ -272,14 +326,6 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
     throw new Error(`Failed to generate repository on GitHub: ${error.message}`);
   }
   
-  // Run the asynchronous post-creation setup for all members of the team
-  const studentLogins = equipe.membros.map(m => m.usuario.github_login);
-  try {
-    await runPostCreationSequence(repoName, studentLogins);
-  } catch (err: any) {
-    logger.error({ err, repoName }, 'Post-creation configuration sequence failed for team');
-  }
-  
   // Persist repository in Database
   const dbRepo = await prisma.repositorio.create({
     data: {
@@ -290,6 +336,8 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
       nome_completo: fullName,
     },
   });
-  
+
+  await enqueueRepoSetupJob(dbRepo.id);
+
   return dbRepo;
 }

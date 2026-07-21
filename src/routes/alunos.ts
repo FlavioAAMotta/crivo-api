@@ -158,7 +158,7 @@ export async function alunoRoutes(fastify: FastifyInstance) {
         let status: 'sem repo' | 'em andamento' | 'congelado' = 'sem repo';
         if (repo) {
           const matchedDbRepo = dbRepoCache.find(r => r.id === repo.id);
-          const isFrozen = matchedDbRepo?.entregas.length > 0 || (new Date(t.deadline) <= now);
+          const isFrozen = (matchedDbRepo?.entregas.length ?? 0) > 0 || (new Date(t.deadline) <= now);
           status = isFrozen ? 'congelado' : 'em andamento';
         }
 

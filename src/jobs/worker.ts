@@ -4,7 +4,9 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
 import { runDetectors } from '../detectors/index.js';
-import { enqueueDetectorJob } from './queues.js';
+import { configureRepository, markRepoSetupFailed } from '../services/repo.js';
+import { runCongelador } from './congelador.js';
+import { enqueueDetectorJob, scheduleCongelador } from './queues.js';
 
 // Setup Redis connection options
 const connectionOptions = {
@@ -91,6 +93,40 @@ export const detectorWorker = new Worker(
   { connection: connectionOptions }
 );
 
+// 3. Repo Setup Worker (colaboradores + branch protection, com retry/backoff)
+export const repoSetupWorker = new Worker(
+  'repo-setup',
+  async (job: Job) => {
+    const { repoId } = job.data;
+    logger.info({ jobId: job.id, repoId, attempt: job.attemptsMade + 1 }, 'Processing repository setup');
+
+    try {
+      await configureRepository(repoId);
+    } catch (error: any) {
+      const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts || config.repoSetup.attempts);
+      logger.error({ error: error.message, repoId, isLastAttempt }, 'Repository setup attempt failed');
+
+      // Esgotou o retry: grava o erro no repositório para o professor ver no dashboard.
+      if (isLastAttempt) {
+        await markRepoSetupFailed(repoId, error.message ?? 'Unknown error');
+      }
+
+      throw error; // Rethrow para o BullMQ agendar o retry
+    }
+  },
+  { connection: connectionOptions }
+);
+
+// 4. Congelador Worker (alimentado pelo repeatable job a cada CONGELADOR_INTERVAL_MS)
+export const congeladorWorker = new Worker(
+  'congelador',
+  async (job: Job) => {
+    logger.debug({ jobId: job.id }, 'Processing congelador sweep');
+    await runCongelador();
+  },
+  { connection: connectionOptions }
+);
+
 // Start listeners and print logger details
 statsWorker.on('completed', (job) => {
   logger.info({ jobId: job.id }, 'stats-commit job completed');
@@ -105,3 +141,51 @@ detectorWorker.on('completed', (job) => {
 detectorWorker.on('failed', (job, err) => {
   logger.error({ jobId: job?.id, err }, 'detector job failed');
 });
+
+repoSetupWorker.on('completed', (job) => {
+  logger.info({ jobId: job.id }, 'repo-setup job completed');
+});
+repoSetupWorker.on('failed', (job, err) => {
+  logger.error({ jobId: job?.id, err }, 'repo-setup job failed');
+});
+
+congeladorWorker.on('failed', (job, err) => {
+  logger.error({ jobId: job?.id, err }, 'congelador job failed');
+});
+
+const allWorkers = [statsWorker, detectorWorker, repoSetupWorker, congeladorWorker];
+
+// Sem um listener de 'error', uma queda momentânea do Redis vira exceção não tratada e
+// derruba o processo inteiro. O ioredis reconecta sozinho; basta registrar e seguir.
+for (const w of allWorkers) {
+  w.on('error', (err) => {
+    logger.error({ err: err.message, worker: w.name }, 'Worker connection error');
+  });
+}
+
+/**
+ * Encerra os workers aguardando os jobs em andamento (evita commit pela metade
+ * quando o container recebe SIGTERM em um deploy).
+ */
+async function shutdown(signal: string) {
+  logger.info({ signal }, 'Shutting down worker process');
+  await Promise.allSettled(allWorkers.map((w) => w.close()));
+  await prisma.$disconnect();
+  process.exit(0);
+}
+
+// Entrypoint: este módulo é executado como processo próprio (`npm run worker`).
+// A API (src/index.ts) NÃO o importa — sem este processo nada consome as filas.
+if (process.env.NODE_ENV !== 'test') {
+  scheduleCongelador().catch((err) => {
+    logger.error({ err }, 'Failed to schedule congelador repeatable job');
+  });
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  logger.info(
+    { queues: ['stats-commit', 'detector', 'repo-setup', 'congelador'] },
+    'Crivo worker process started'
+  );
+}

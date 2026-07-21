@@ -20,6 +20,8 @@ vi.mock('../src/jobs/queues.js', () => {
   return {
     enqueueStatsJob: vi.fn(),
     enqueueDetectorJob: vi.fn(),
+    enqueueRepoSetupJob: vi.fn(),
+    scheduleCongelador: vi.fn(),
   };
 });
 
@@ -79,7 +81,9 @@ describe('Email commit author resolution', () => {
     } as any);
 
     vi.mocked(prisma.push.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.push.create).mockResolvedValue({ id: 5 } as any);
     vi.mocked(prisma.commit.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.commit.create).mockResolvedValue({ id: 6, repositorio_id: 1, sha: 'sha' } as any);
     
     // Simulate that email is registered in db
     vi.mocked(prisma.emailCommit.findUnique).mockResolvedValue({
@@ -131,7 +135,9 @@ describe('Email commit author resolution', () => {
     } as any);
 
     vi.mocked(prisma.push.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.push.create).mockResolvedValue({ id: 5 } as any);
     vi.mocked(prisma.commit.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.commit.create).mockResolvedValue({ id: 6, repositorio_id: 1, sha: 'sha' } as any);
     
     // Simulate email not registered
     vi.mocked(prisma.emailCommit.findUnique).mockResolvedValue(null);

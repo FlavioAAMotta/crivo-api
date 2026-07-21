@@ -34,6 +34,22 @@ export const config = {
   GITHUB_OAUTH_CLIENT_ID: process.env.GITHUB_OAUTH_CLIENT_ID || 'mock_client_id',
   GITHUB_OAUTH_CLIENT_SECRET: process.env.GITHUB_OAUTH_CLIENT_SECRET || 'mock_client_secret',
 
+  // Congelador (repeatable job registrado no processo do worker)
+  congelador: {
+    intervalMs: process.env.CONGELADOR_INTERVAL_MS
+      ? parseInt(process.env.CONGELADOR_INTERVAL_MS, 10)
+      : 60_000,
+  },
+
+  // Sequência pós-criação de repositório (colaboradores + branch protection)
+  repoSetup: {
+    attempts: 5,
+    backoffMs: 10_000,
+    // Polling pela branch main dentro de cada tentativa
+    pollAttempts: 10,
+    pollIntervalMs: 2000,
+  },
+
   // Detector Thresholds
   detectors: {
     divergenciaEquipe: {

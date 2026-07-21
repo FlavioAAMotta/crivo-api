@@ -64,6 +64,11 @@ const revisarSinalizacaoBodySchema = z.object({
 
 const trabalhoIdParamsSchema = z.object({ id: z.string().transform(Number) });
 
+// force=true recongela repositórios que já possuem entrega, criando entrega-N+1.
+const congelarQuerySchema = z.object({
+  force: z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
+});
+
 const AUTH_SECURITY: Record<string, string[]>[] = [{ cookieAuth: [] }, { bearerAuth: [] }];
 
 export async function professorRoutes(fastify: FastifyInstance) {
@@ -377,6 +382,10 @@ export async function professorRoutes(fastify: FastifyInstance) {
         total_commits: r.commits.length,
         sinalizacoes_pendentes: r.sinalizacoes.length,
         status: statusLabel,
+        // ERRO aqui significa que o aluno pode estar sem acesso de push ao próprio
+        // repositório, ou que a branch main ficou desprotegida.
+        setup_status: r.setup_status,
+        setup_erro: r.setup_erro,
       });
     }
 
@@ -545,6 +554,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
       summary: 'Força o congelamento imediato dos repositórios de um trabalho',
       security: AUTH_SECURITY,
       params: docSchema(trabalhoIdParamsSchema),
+      querystring: docSchema(congelarQuerySchema),
     },
   }, async (request, reply) => {
     const paramsSchema = trabalhoIdParamsSchema;
@@ -559,22 +569,12 @@ export async function professorRoutes(fastify: FastifyInstance) {
       return;
     }
     
-    // Manual freeze triggers the congelador worker instantly
-    // We can also force freeze all repos ignoring deadline by temporarily setting deadline to now in memory,
-    // or just run runCongelador which covers all trabalhos with deadline in the past.
-    // To make /congelar work instantly regardless of deadline, let's update this specific trabalho's deadline 
-    // to current time so the congelador captures it! That's extremely direct and database consistent.
-    await prisma.trabalho.update({
-      where: { id: trabalhoId },
-      data: {
-        deadline: new Date(),
-        congelamento_automatico: true,
-      },
-    });
-    
-    // Run the sweep
-    await runCongelador();
-    
+    // Congelamento manual: roda a varredura restrita a este trabalho, ignorando o deadline.
+    // `force` permite recongelar um repositório que já tem entrega, gerando entrega-N+1
+    // (ex.: o prazo foi prorrogado). Sem force, repositórios já congelados são pulados.
+    const { force } = congelarQuerySchema.parse(request.query);
+    await runCongelador({ trabalhoId, force });
+
     return reply.send({ success: true, message: 'Freezing routine executed for this trabalho' });
   });
 }

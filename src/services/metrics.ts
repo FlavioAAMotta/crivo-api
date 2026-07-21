@@ -116,6 +116,9 @@ export async function getRepositoryMetrics(repoId: number) {
       github_repo_id: repo.github_repo_id,
       criado_em: repo.criado_em,
       dono_tipo: repo.dono_tipo,
+      // Falha na configuração pós-criação (colaborador/branch protection) fica visível aqui.
+      setup_status: repo.setup_status,
+      setup_erro: repo.setup_erro,
       usuario: repo.usuario,
       equipe: repo.equipe,
     },
