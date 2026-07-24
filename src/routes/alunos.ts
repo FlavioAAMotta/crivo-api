@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../lib/auth.js';
 import { createRepositoryForStudent, createRepositoryForTeam } from '../services/repo.js';
-import { createTeam, addTeamMember } from '../services/team.js';
+import { createTeam, addTeamMember, listTeamsForTrabalho } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
@@ -202,6 +202,32 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       return reply.status(201).send(serializeBigInt(dbRepo));
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // 3a. GET /trabalhos/:id/equipes -> lists all teams of a group work (class board)
+  fastify.get('/trabalhos/:id/equipes', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Lista as equipes de um trabalho em grupo (quadro da turma)',
+      description:
+        'Devolve tamanho e status de cada equipe do trabalho, sem expor a composição de grupos alheios. Apenas para alunos matriculados na turma.',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const parseResult = trabalhoIdParamsSchema.safeParse(request.params);
+    if (!parseResult.success) {
+      reply.status(400).send({ error: 'Invalid trabalho ID' });
+      return;
+    }
+
+    try {
+      const equipes = await listTeamsForTrabalho(parseResult.data.id, request.user!.id);
+      return reply.send(equipes);
+    } catch (err: any) {
+      // TeamError carrega o status; erros inesperados caem em 400.
+      return reply.status(err.statusCode || 400).send({ error: err.message });
     }
   });
 
