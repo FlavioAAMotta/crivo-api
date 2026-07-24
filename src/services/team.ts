@@ -50,6 +50,75 @@ export async function createTeam(trabalhoId: number, nome: string, creatorId: nu
 }
 
 /**
+ * Erro com status HTTP embutido, para o handler mapear sem adivinhar.
+ */
+class TeamError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = 'TeamError';
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Lista as equipes de um trabalho em grupo — o "quadro da turma" do aluno.
+ *
+ * Privacidade: NÃO expõe quem está em cada equipe, só o tamanho e o status. Um
+ * aluno pode ver quais grupos existem e quais ainda estão formando sem que a
+ * composição de cada grupo vire informação pública. A própria equipe do aluno
+ * é sinalizada por `sou_membro`, para a UI destacá-la.
+ *
+ * Status: `completo` quando a equipe já criou seu repositório (comprometeu-se
+ * com o trabalho); `formando` enquanto ainda não criou. É o único sinal
+ * objetivo de "pronto" no schema — não há tamanho-alvo de equipe para comparar.
+ *
+ * Acesso: apenas alunos matriculados na turma do trabalho. Sem isso, um aluno
+ * poderia enumerar os grupos de turmas das quais não participa.
+ */
+export async function listTeamsForTrabalho(trabalhoId: number, requesterId: number) {
+  const trabalho = await prisma.trabalho.findUnique({
+    where: { id: trabalhoId },
+    include: {
+      turma: {
+        include: {
+          matriculas: { select: { usuario_id: true } },
+        },
+      },
+      equipes: {
+        include: {
+          membros: { select: { usuario_id: true } },
+          repositorios: { select: { id: true } },
+        },
+      },
+    },
+  });
+
+  if (!trabalho) {
+    throw new TeamError('Trabalho not found', 404);
+  }
+
+  const isMatriculated = trabalho.turma.matriculas.some(m => m.usuario_id === requesterId);
+  if (isMatriculated === false) {
+    throw new TeamError('Forbidden: you are not enrolled in this class', 403);
+  }
+
+  // Trabalho individual simplesmente não tem equipes; devolver lista vazia é
+  // mais amigável para a UI do que um erro.
+  return trabalho.equipes.map(equipe => {
+    const temRepositorio = equipe.repositorios.length > 0;
+    return {
+      id: equipe.id,
+      nome: equipe.nome,
+      total_integrantes: equipe.membros.length,
+      tem_repositorio: temRepositorio,
+      status: temRepositorio ? 'completo' : 'formando',
+      sou_membro: equipe.membros.some(m => m.usuario_id === requesterId),
+    };
+  });
+}
+
+/**
  * Adds a new member to an existing team.
  */
 export async function addTeamMember(equipeId: number, usuarioId: number, requesterId: number, requesterRole: 'ALUNO' | 'PROFESSOR') {

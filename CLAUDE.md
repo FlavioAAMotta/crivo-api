@@ -72,6 +72,7 @@ Produção roda **dois processos a partir do mesmo código**:
 - **GitHub calls** go through `getInstallationOctokit()` (installation id cached per process) wrapped in `withGithubRetry()` for 403/429/5xx backoff — use both rather than calling Octokit directly.
 - **Repo creation** (`src/services/repo.ts`) generates from the trabalho's `template_repo`, then polls up to ~20s for the `main` branch to materialize before adding collaborators and enabling branch protection. Post-creation failures are logged, not fatal — the DB row is still written.
 - **Config has permissive defaults** (mock secrets, localhost URLs) so tests and dev boot without a `.env`; see `.env.example` for the real set.
+- **Team listing is privacy-scoped.** `GET /trabalhos/:id/equipes` (`listTeamsForTrabalho` em `src/services/team.ts`) alimenta o "quadro da turma" do aluno. Devolve apenas `total_integrantes` e `status` (`completo` = já criou repositório) por equipe — **nunca a composição dos grupos** —, e só para alunos matriculados na turma. Ao estender, não passe a expor os membros: a ausência deles é intencional.
 
 ## Tests
 
