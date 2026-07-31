@@ -22,6 +22,8 @@ const criarTurmaBodySchema = z.object({
 
 const turmaIdParamsSchema = z.object({ id: z.string().transform(Number) });
 
+const alunoIdParamsSchema = z.object({ id: z.string().transform(Number) });
+
 const importarMatriculasBodySchema = z.object({
   matriculas: z.array(
     z.object({
@@ -215,6 +217,34 @@ export async function professorRoutes(fastify: FastifyInstance) {
     }));
 
     return reply.send(linhas);
+  });
+
+  fastify.post('/prof/alunos/:id/resetar-senha', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Zera a senha de um aluno pendente de vínculo do GitHub (escape hatch)',
+      security: AUTH_SECURITY,
+      params: docSchema(alunoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id } = alunoIdParamsSchema.parse(request.params);
+
+    const aluno = await prisma.usuario.findUnique({ where: { id } });
+    if (!aluno || aluno.papel !== 'ALUNO') {
+      reply.status(404).send({ error: 'Aluno not found' });
+      return;
+    }
+    if (aluno.github_id) {
+      reply.status(409).send({ error: 'Aluno já vinculado ao GitHub — reset não é necessário' });
+      return;
+    }
+
+    const atualizado = await prisma.usuario.update({
+      where: { id },
+      data: { senha_hash: null, senha_redefinida_em: null },
+    });
+
+    return reply.send({ success: true, usuario: serializeBigInt(atualizado) });
   });
 
   // ==========================================

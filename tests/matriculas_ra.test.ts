@@ -10,7 +10,7 @@ vi.mock('bullmq', () => ({
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
-    usuario: { upsert: vi.fn(), findMany: vi.fn() },
+    usuario: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     matricula: { upsert: vi.fn(), findMany: vi.fn() },
   },
 }));
@@ -110,5 +110,56 @@ describe('GET /prof/turmas/:id/matriculas', () => {
         vinculado: false,
       },
     ]);
+  });
+});
+
+describe('POST /prof/alunos/:id/resetar-senha', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('404 quando o aluno não existe', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue(null);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/alunos/999/resetar-senha',
+      headers: authProf,
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('409 quando o aluno já está vinculado ao GitHub', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      id: 50, papel: 'ALUNO', github_id: 123n,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/alunos/50/resetar-senha',
+      headers: authProf,
+    });
+    expect(response.statusCode).toBe(409);
+  });
+
+  it('zera senha_hash quando pendente de vínculo', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      id: 50, papel: 'ALUNO', github_id: null,
+    } as any);
+    vi.mocked(prisma.usuario.update).mockResolvedValue({ id: 50 } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/alunos/50/resetar-senha',
+      headers: authProf,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prisma.usuario.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: { senha_hash: null, senha_redefinida_em: null },
+    });
   });
 });
