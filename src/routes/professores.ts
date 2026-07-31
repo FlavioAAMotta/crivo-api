@@ -25,10 +25,8 @@ const turmaIdParamsSchema = z.object({ id: z.string().transform(Number) });
 const importarMatriculasBodySchema = z.object({
   matriculas: z.array(
     z.object({
-      github_login: z.string().min(1),
-      nome: z.string().optional(),
-      matricula: z.string().optional(),
-      email: z.string().email().optional(),
+      ra: z.string().min(1),
+      nome: z.string().min(1),
     })
   ),
 });
@@ -155,83 +153,68 @@ export async function professorRoutes(fastify: FastifyInstance) {
   fastify.post('/prof/turmas/:id/matriculas', {
     schema: {
       tags: ['professores'],
-      summary: 'Importa matrículas de alunos em uma turma a partir de logins do GitHub',
+      summary: 'Importa matrículas de alunos em uma turma a partir do RA (sem GitHub)',
       security: AUTH_SECURITY,
       params: docSchema(turmaIdParamsSchema),
       body: docSchema(importarMatriculasBodySchema),
     },
   }, async (request, reply) => {
-    const paramsSchema = turmaIdParamsSchema;
-    const bodySchema = importarMatriculasBodySchema;
+    const { id: turmaId } = turmaIdParamsSchema.parse(request.params);
+    const { matriculas } = importarMatriculasBodySchema.parse(request.body);
 
-    const { id: turmaId } = paramsSchema.parse(request.params);
-    const { matriculas } = bodySchema.parse(request.body);
-    
-    const imported = [];
-    const failed = [];
-    
-    const octokit = await getInstallationOctokit();
-    
+    const importados: string[] = [];
+
     for (const item of matriculas) {
-      try {
-        // Resolve GitHub username to github_id using GitHub API
-        const gitUser = await withGithubRetry(() =>
-          octokit.rest.users.getByUsername({ username: item.github_login })
-        );
-        
-        const githubId = BigInt(gitUser.data.id);
-        const name = gitUser.data.name || item.nome || item.github_login;
-        
-        const user = await prisma.usuario.upsert({
-          where: { github_id: githubId },
-          update: {
-            github_login: item.github_login,
-            nome: name,
-            matricula: item.matricula || null,
-          },
-          create: {
-            github_id: githubId,
-            github_login: item.github_login,
-            nome: name,
-            papel: 'ALUNO',
-            matricula: item.matricula || null,
-          },
-        });
-        
-        if (item.email) {
-          await prisma.emailCommit.upsert({
-            where: { email: item.email.toLowerCase() },
-            update: {},
-            create: {
-              usuario_id: user.id,
-              email: item.email.toLowerCase(),
-              verificado: true,
-            },
-          });
-        }
-        
-        await prisma.matricula.upsert({
-          where: {
-            usuario_id_turma_id: {
-              usuario_id: user.id,
-              turma_id: turmaId,
-            },
-          },
-          update: {},
-          create: {
-            usuario_id: user.id,
-            turma_id: turmaId,
-          },
-        });
-        
-        imported.push(item.github_login);
-      } catch (err: any) {
-        logger.error({ err: err.message, login: item.github_login }, 'Failed to import student matricula');
-        failed.push({ github_login: item.github_login, reason: err.message });
-      }
+      const usuario = await prisma.usuario.upsert({
+        where: { matricula: item.ra },
+        update: {},
+        create: {
+          matricula: item.ra,
+          nome: item.nome,
+          papel: 'ALUNO',
+          github_id: null,
+          github_login: null,
+          senha_hash: null,
+        },
+      });
+
+      await prisma.matricula.upsert({
+        where: { usuario_id_turma_id: { usuario_id: usuario.id, turma_id: turmaId } },
+        update: {},
+        create: { usuario_id: usuario.id, turma_id: turmaId },
+      });
+
+      importados.push(item.ra);
     }
-    
-    return reply.send({ success: true, imported, failed });
+
+    return reply.send({ success: true, imported: importados });
+  });
+
+  fastify.get('/prof/turmas/:id/matriculas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista os alunos matriculados na turma e o status de ativação de cada um',
+      security: AUTH_SECURITY,
+      params: docSchema(turmaIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id: turmaId } = turmaIdParamsSchema.parse(request.params);
+
+    const matriculas = await prisma.matricula.findMany({
+      where: { turma_id: turmaId },
+      include: { usuario: true },
+    });
+
+    const linhas = matriculas.map((m) => ({
+      usuario_id: m.usuario.id,
+      nome: m.usuario.nome,
+      matricula: m.usuario.matricula,
+      github_login: m.usuario.github_login,
+      senha_definida: m.usuario.senha_hash !== null,
+      vinculado: m.usuario.github_login !== null,
+    }));
+
+    return reply.send(linhas);
   });
 
   // ==========================================
