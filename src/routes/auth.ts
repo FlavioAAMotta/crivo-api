@@ -21,6 +21,10 @@ const loginRaBodySchema = z.object({
   senha: z.string().min(1),
 });
 
+const redefinirSenhaBodySchema = z.object({
+  senha_nova: z.string().min(8),
+});
+
 const deleteEmailParamsSchema = z.object({
   id: z.string().transform(Number),
 });
@@ -231,6 +235,35 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     const token = signPreAuthToken({ usuario_id: usuario.id, etapa: 'vincular_github' });
+    reply.send({ preauth_token: token, etapa: 'vincular_github' });
+  });
+
+  // 2c. Troca a senha inicial — etapa obrigatória antes de vincular o GitHub
+  fastify.post('/auth/redefinir-senha', {
+    preHandler: [requirePreAuth('redefinir_senha')],
+    schema: {
+      tags: ['auth'],
+      summary: 'Troca a senha inicial do aluno',
+      security: [{ bearerAuth: [] }],
+      body: docSchema(redefinirSenhaBodySchema),
+    },
+  }, async (request, reply) => {
+    const parseResult = redefinirSenhaBodySchema.safeParse(request.body);
+    if (!parseResult.success) {
+      reply.status(400).send({ error: parseResult.error.message });
+      return;
+    }
+
+    const { senha_nova } = parseResult.data;
+    const usuarioId = request.preAuth!.usuario_id;
+
+    const senhaHash = await bcrypt.hash(senha_nova, 10);
+    await prisma.usuario.update({
+      where: { id: usuarioId },
+      data: { senha_hash: senhaHash, senha_redefinida_em: new Date() },
+    });
+
+    const token = signPreAuthToken({ usuario_id: usuarioId, etapa: 'vincular_github' });
     reply.send({ preauth_token: token, etapa: 'vincular_github' });
   });
 

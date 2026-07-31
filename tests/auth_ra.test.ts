@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildApp } from '../src/index.js';
 import { prisma } from '../src/lib/prisma.js';
-import { verifyPreAuthToken } from '../src/lib/auth.js';
+import { verifyPreAuthToken, signPreAuthToken } from '../src/lib/auth.js';
 
 vi.mock('bullmq', () => ({
   Queue: class { add = vi.fn(); },
@@ -127,5 +127,63 @@ describe('POST /auth/login-ra', () => {
     });
 
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe('POST /auth/redefinir-senha', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('rejeita sem token de pré-ativação', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/redefinir-senha',
+      payload: { senha_nova: 'senha-nova-123' },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('rejeita token na etapa errada', async () => {
+    const tokenEtapaErrada = signPreAuthToken({ usuario_id: 40, etapa: 'vincular_github' });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/redefinir-senha',
+      headers: { authorization: `Bearer ${tokenEtapaErrada}` },
+      payload: { senha_nova: 'senha-nova-123' },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('rejeita senha nova curta', async () => {
+    const token = signPreAuthToken({ usuario_id: 40, etapa: 'redefinir_senha' });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/redefinir-senha',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { senha_nova: '123' },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('troca a senha e emite token para a etapa vincular_github', async () => {
+    vi.mocked(prisma.usuario.update).mockResolvedValue({} as any);
+    const token = signPreAuthToken({ usuario_id: 40, etapa: 'redefinir_senha' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/redefinir-senha',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { senha_nova: 'senha-nova-123' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.etapa).toBe('vincular_github');
+    expect(prisma.usuario.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 40 } }),
+    );
   });
 });
