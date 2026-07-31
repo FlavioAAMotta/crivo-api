@@ -55,13 +55,15 @@ enum SinalizacaoStatus {
 }
 
 model Usuario {
-  id           Int      @id @default(autoincrement())
-  github_id    BigInt   @unique
-  github_login String   @unique
-  nome         String
-  papel        Papel
-  matricula    String?
-  criado_em    DateTime @default(now())
+  id                  Int       @id @default(autoincrement())
+  github_id           BigInt?   @unique
+  github_login        String?   @unique
+  nome                String
+  papel               Papel
+  matricula           String?   @unique
+  senha_hash          String?
+  senha_redefinida_em DateTime?
+  criado_em           DateTime  @default(now())
 
   emails            EmailCommit[]
   matriculas        Matricula[]

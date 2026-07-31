@@ -94,6 +94,18 @@ async function main() {
       matricula: '12345678-C',
     },
   });
+
+  const aluno4Pendente = await prisma.usuario.upsert({
+    where: { matricula: '25-99999' },
+    update: {},
+    create: {
+      nome: 'Aluno Pendente de Vínculo',
+      papel: 'ALUNO',
+      matricula: '25-99999',
+    },
+  });
+  console.log('Seeded Aluno Pendente:', aluno4Pendente.matricula);
+
   console.log('Seeded Alunos:', aluno1.github_login, aluno2.github_login, aluno3.github_login);
 
   // 5. Seed Matriculas
@@ -114,6 +126,13 @@ async function main() {
     update: {},
     create: { usuario_id: aluno3.id, turma_id: turmaB.id },
   });
+
+  await prisma.matricula.upsert({
+    where: { usuario_id_turma_id: { usuario_id: aluno4Pendente.id, turma_id: turmaB.id } },
+    update: {},
+    create: { usuario_id: aluno4Pendente.id, turma_id: turmaB.id },
+  });
+
   console.log('Seeded Matriculas');
 
   // 6. Seed Email Commits
