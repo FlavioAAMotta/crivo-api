@@ -113,7 +113,7 @@ async function detectDivergencia(repo: any) {
     const suspiciousPushes = await prisma.push.findMany({
       where: {
         repositorio_id: repoId,
-        pusher_github_id: { not: owner.github_id },
+        pusher_github_id: { not: owner.github_id! },
       },
     });
 
@@ -124,7 +124,7 @@ async function detectDivergencia(repo: any) {
         pusher_login: lastPush.pusher_login,
         pusher_github_id: lastPush.pusher_github_id.toString(),
         owner_login: owner.github_login,
-        owner_github_id: owner.github_id.toString(),
+        owner_github_id: owner.github_id!.toString(),
       });
       return;
     }

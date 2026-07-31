@@ -362,10 +362,10 @@ export async function professorRoutes(fastify: FastifyInstance) {
       
       if (r.dono_tipo === 'ALUNO' && r.usuario) {
         donoLabel = r.usuario.nome;
-        membros = [r.usuario.github_login];
+        membros = [r.usuario.github_login!];
       } else if (r.dono_tipo === 'EQUIPE' && r.equipe) {
         donoLabel = `Equipe: ${r.equipe.nome}`;
-        membros = r.equipe.membros.map(m => m.usuario.github_login);
+        membros = r.equipe.membros.map(m => m.usuario.github_login!);
       }
       
       const lastPush = r.pushes[0];
@@ -416,7 +416,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
             repositorio_id: null,
             nome_completo: null,
             dono: m.usuario.nome,
-            membros: [m.usuario.github_login],
+            membros: [m.usuario.github_login!],
             ultimo_push: null,
             total_commits: 0,
             sinalizacoes_pendentes: 0,
@@ -439,7 +439,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
             repositorio_id: null,
             nome_completo: null,
             dono: `Equipe: ${team.nome}`,
-            membros: team.membros.map(m => m.usuario.github_login),
+            membros: team.membros.map(m => m.usuario.github_login!),
             ultimo_push: null,
             total_commits: 0,
             sinalizacoes_pendentes: 0,

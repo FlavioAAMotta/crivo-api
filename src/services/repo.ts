@@ -112,8 +112,8 @@ export async function configureRepository(repoId: number) {
 
   const repoNameOnly = repo.nome_completo.split('/')[1];
   const studentLogins = repo.dono_tipo === 'ALUNO'
-    ? (repo.usuario ? [repo.usuario.github_login] : [])
-    : repo.equipe?.membros.map((m) => m.usuario.github_login) ?? [];
+    ? (repo.usuario ? [repo.usuario.github_login!] : [])
+    : repo.equipe?.membros.map((m) => m.usuario.github_login!) ?? [];
 
   await prisma.repositorio.update({
     where: { id: repoId },
@@ -191,7 +191,7 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
   }
   
   // Naming format: {codigo-disciplina}-{trabalho-slug}-{login-aluno} normalized
-  const baseName = `${trabalho.turma.disciplina.codigo}-${trabalho.slug}-${user.github_login}`;
+  const baseName = `${trabalho.turma.disciplina.codigo}-${trabalho.slug}-${user.github_login!}`;
   const repoName = sanitizeRepoName(baseName);
   const fullName = `${config.GITHUB_ORG}/${repoName}`;
   
