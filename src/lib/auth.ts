@@ -36,6 +36,62 @@ export function verifyToken(token: string): UserPayload {
   return jwt.verify(token, config.JWT_SECRET) as UserPayload;
 }
 
+export interface PreAuthPayload {
+  usuario_id: number;
+  etapa: 'redefinir_senha' | 'vincular_github';
+}
+
+/**
+ * Token de pré-ativação: namespace de JWT separado da sessão normal. Nunca é
+ * aceito por requireAuth/requireProfessor — só serve para as duas etapas de
+ * ativação (trocar senha, vincular GitHub), com vida curta.
+ */
+export function signPreAuthToken(payload: PreAuthPayload): string {
+  return jwt.sign(payload, config.JWT_SECRET, { expiresIn: '15m' });
+}
+
+export function verifyPreAuthToken(token: string): PreAuthPayload {
+  const decoded = jwt.verify(token, config.JWT_SECRET) as any;
+  if (
+    typeof decoded.usuario_id !== 'number' ||
+    (decoded.etapa !== 'redefinir_senha' && decoded.etapa !== 'vincular_github')
+  ) {
+    throw new Error('Token de pré-ativação inválido');
+  }
+  return { usuario_id: decoded.usuario_id, etapa: decoded.etapa };
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    preAuth?: PreAuthPayload;
+  }
+}
+
+/**
+ * Middleware: exige um token de pré-ativação na etapa esperada. Rejeita se a
+ * etapa não bater — impede pular a troca de senha indo direto pro vínculo.
+ */
+export function requirePreAuth(etapaEsperada: PreAuthPayload['etapa']) {
+  return async function (request: FastifyRequest, reply: FastifyReply) {
+    const header = request.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+    if (!token) {
+      reply.status(401).send({ error: 'Token de pré-ativação ausente' });
+      return;
+    }
+    try {
+      const payload = verifyPreAuthToken(token);
+      if (payload.etapa !== etapaEsperada) {
+        reply.status(400).send({ error: `Etapa incorreta: esperado '${etapaEsperada}'` });
+        return;
+      }
+      request.preAuth = payload;
+    } catch {
+      reply.status(401).send({ error: 'Token de pré-ativação inválido ou expirado' });
+    }
+  };
+}
+
 /**
  * Middleware: Requires the user to be authenticated.
  * Extracts token from httpOnly cookie or Authorization header.

@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { config } from '../lib/config.js';
-import { signToken, requireAuth } from '../lib/auth.js';
+import { signToken, requireAuth, signPreAuthToken, verifyPreAuthToken, requirePreAuth } from '../lib/auth.js';
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
@@ -13,6 +14,11 @@ const callbackQuerySchema = z.object({
 
 const postEmailBodySchema = z.object({
   email: z.string().email(),
+});
+
+const loginRaBodySchema = z.object({
+  ra: z.string().min(1),
+  senha: z.string().min(1),
 });
 
 const deleteEmailParamsSchema = z.object({
@@ -180,6 +186,52 @@ export async function authRoutes(fastify: FastifyInstance) {
       logger.error(error, 'OAuth callback processing failed');
       reply.status(500).send({ error: 'Authentication internal server error' });
     }
+  });
+
+  // 2b. Login inicial do aluno por RA — porta de entrada única antes do vínculo com GitHub
+  fastify.post('/auth/login-ra', {
+    schema: {
+      tags: ['auth'],
+      summary: 'Login por RA (primeiro acesso do aluno, antes de vincular o GitHub)',
+      body: docSchema(loginRaBodySchema),
+    },
+  }, async (request, reply) => {
+    const { ra, senha } = loginRaBodySchema.parse(request.body);
+
+    const usuario = await prisma.usuario.findUnique({ where: { matricula: ra } });
+
+    // Comparação dummy quando o usuário não existe: mantém o tempo de resposta
+    // parecido com o caminho de senha errada, para não vazar por timing quais
+    // RAs estão cadastrados.
+    if (!usuario || usuario.papel !== 'ALUNO') {
+      await bcrypt.compare(senha, '$2a$10$invalidinvalidinvalidu.invalidinvalidinva');
+      reply.status(401).send({ error: 'Credenciais inválidas' });
+      return;
+    }
+
+    if (usuario.github_id) {
+      reply.status(409).send({ error: 'Esta conta já está vinculada ao GitHub — entre com GitHub.' });
+      return;
+    }
+
+    if (usuario.senha_hash === null) {
+      if (senha !== ra) {
+        reply.status(401).send({ error: 'Credenciais inválidas' });
+        return;
+      }
+      const token = signPreAuthToken({ usuario_id: usuario.id, etapa: 'redefinir_senha' });
+      reply.send({ preauth_token: token, etapa: 'redefinir_senha' });
+      return;
+    }
+
+    const senhaCorreta = await bcrypt.compare(senha, usuario.senha_hash);
+    if (!senhaCorreta) {
+      reply.status(401).send({ error: 'Credenciais inválidas' });
+      return;
+    }
+
+    const token = signPreAuthToken({ usuario_id: usuario.id, etapa: 'vincular_github' });
+    reply.send({ preauth_token: token, etapa: 'vincular_github' });
   });
 
   // 3. Get profile /me
