@@ -8,8 +8,11 @@ import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
 
+const iniciarOauthQuerySchema = z.object({ state: z.string().optional() });
+
 const callbackQuerySchema = z.object({
   code: z.string(),
+  state: z.string().optional(),
 });
 
 const postEmailBodySchema = z.object({
@@ -36,13 +39,18 @@ export async function authRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['auth'],
       summary: 'Inicia o fluxo de OAuth com o GitHub',
-      description: 'Redireciona o usuário para a página de autorização do GitHub.',
+      description: 'Redireciona para a autorização do GitHub. Se `state` vier preenchido com um token de pré-ativação (etapa vincular_github), o callback vincula o GitHub autorizado ao usuário pendente em vez de criar/logar uma conta nova.',
+      querystring: docSchema(iniciarOauthQuerySchema),
     },
   }, async (request, reply) => {
+    const { state } = iniciarOauthQuerySchema.parse(request.query);
     const clientId = config.GITHUB_OAUTH_CLIENT_ID;
     const redirectUri = `${config.APP_BASE_URL}/auth/github/callback`;
-    const oauthUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email`;
-    
+    let oauthUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email`;
+    if (state) {
+      oauthUrl += `&state=${encodeURIComponent(state)}`;
+    }
+
     return reply.redirect(oauthUrl);
   });
 
@@ -106,7 +114,57 @@ export async function authRoutes(fastify: FastifyInstance) {
       const githubId = BigInt(userProfile.id);
       const githubLogin = userProfile.login;
       const nome = userProfile.name || userProfile.login;
-      
+
+      const { state } = parseResult.data;
+
+      if (state) {
+        let preAuth;
+        try {
+          preAuth = verifyPreAuthToken(state);
+        } catch {
+          reply.status(401).send({ error: 'Token de pré-ativação inválido ou expirado' });
+          return;
+        }
+        if (preAuth.etapa !== 'vincular_github') {
+          reply.status(400).send({ error: "Etapa incorreta: esperado 'vincular_github'" });
+          return;
+        }
+
+        const conflito = await prisma.usuario.findUnique({ where: { github_id: githubId } });
+        if (conflito && conflito.id !== preAuth.usuario_id) {
+          reply.status(409).send({ error: 'Esta conta do GitHub já está vinculada a outro usuário' });
+          return;
+        }
+
+        const usuarioPendente = await prisma.usuario.findUnique({ where: { id: preAuth.usuario_id } });
+        if (!usuarioPendente) {
+          reply.status(404).send({ error: 'Usuário pendente não encontrado' });
+          return;
+        }
+
+        const vinculado = await prisma.usuario.update({
+          where: { id: preAuth.usuario_id },
+          data: { github_id: githubId, github_login: githubLogin },
+        });
+
+        const tokenVinculo = signToken({
+          id: vinculado.id,
+          github_id: vinculado.github_id!,
+          github_login: vinculado.github_login!,
+          papel: vinculado.papel,
+        });
+
+        reply.setCookie('token', tokenVinculo, {
+          path: '/',
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60,
+        });
+
+        return reply.redirect(`${config.FRONTEND_URL}/auth/callback?token=${tokenVinculo}`);
+      }
+
       // Check if user is in predefined professor list
       const isPredefinedProf = config.PROFESSOR_LOGINS.includes(githubLogin.toLowerCase());
       
@@ -173,8 +231,13 @@ export async function authRoutes(fastify: FastifyInstance) {
       }
       
       // Generate JWT Token
-      const token = signToken(user);
-      
+      const token = signToken({
+        id: user.id,
+        github_id: user.github_id!,
+        github_login: user.github_login!,
+        papel: user.papel,
+      });
+
       // Set Cookie and send success response
       reply.setCookie('token', token, {
         path: '/',
@@ -183,8 +246,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60, // 7 days
       });
-      
-      return reply.send({ success: true, token, user: serializeBigInt(user) });
+
+      return reply.redirect(`${config.FRONTEND_URL}/auth/callback?token=${token}`);
       
     } catch (error) {
       logger.error(error, 'OAuth callback processing failed');

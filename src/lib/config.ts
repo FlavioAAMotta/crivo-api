@@ -14,6 +14,7 @@ export const config = {
   // App Config
   PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
   APP_BASE_URL: process.env.APP_BASE_URL || 'http://localhost:3000',
+  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
   JWT_SECRET: process.env.JWT_SECRET || 'mock_super_secret_jwt_key',
   
   // Database & Redis
