@@ -113,7 +113,9 @@ export async function configureRepository(repoId: number) {
   const repoNameOnly = repo.nome_completo.split('/')[1];
   const studentLogins = repo.dono_tipo === 'ALUNO'
     ? (repo.usuario ? [repo.usuario.github_login!] : [])
-    : repo.equipe?.membros.map((m) => m.usuario.github_login!) ?? [];
+    : repo.equipe?.membros
+        .map((m) => m.usuario.github_login)
+        .filter((login): login is string => login !== null) ?? [];
 
   await prisma.repositorio.update({
     where: { id: repoId },
