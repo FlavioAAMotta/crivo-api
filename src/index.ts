@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { authRoutes } from './routes/auth.js';
@@ -27,6 +28,15 @@ export function buildApp() {
 
   // Register cookie parser
   fastify.register(cookie);
+
+  // crivo-front roda num domínio Railway separado (deploy estático, sem proxy pra
+  // /api/*) — chamadas cross-origin precisam de CORS. Só a origem do front, e sem
+  // credentials: a sessão nesse caminho vai por Bearer token (localStorage), não
+  // pelo cookie httpOnly (que não sobrevive cross-site com SameSite=Lax mesmo). Ver
+  // D15 em docs/DECISOES.md.
+  fastify.register(cors, {
+    origin: config.FRONTEND_URL,
+  });
 
   // Register OpenAPI docs (served at /docs)
   fastify.register(swagger, swaggerOptions);
