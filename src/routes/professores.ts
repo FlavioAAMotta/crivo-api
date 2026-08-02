@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireProfessor } from '../lib/auth.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
+import { enqueueRepoSetupJob } from '../jobs/queues.js';
 import { runCongelador } from '../jobs/congelador.js';
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
@@ -473,6 +474,45 @@ export async function professorRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       reply.status(404).send({ error: err.message });
     }
+  });
+
+  // ==========================================
+  // 6b. POST /prof/repositorios/:id/reprocessar-setup
+  // ==========================================
+
+  fastify.post('/prof/repositorios/:id/reprocessar-setup', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Reprocessa a configuração pós-criação (colaboradores + ruleset) de um repositório em ERRO',
+      security: AUTH_SECURITY,
+      params: docSchema(repositorioIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const paramsSchema = repositorioIdParamsSchema;
+    const { id: repoId } = paramsSchema.parse(request.params);
+
+    const repo = await prisma.repositorio.findUnique({ where: { id: repoId } });
+    if (!repo) {
+      reply.status(404).send({ error: 'Repositório not found' });
+      return;
+    }
+
+    // Só faz sentido reenfileirar quem falhou — repositório saudável não deve
+    // reentrar na fila por engano (idempotência do ruleset cobre reentrada
+    // acidental, mas o guard aqui deixa a intenção explícita).
+    if (repo.setup_status !== 'ERRO') {
+      reply.status(409).send({ error: `Repositório está com setup_status=${repo.setup_status}, não ERRO — nada a reprocessar` });
+      return;
+    }
+
+    const atualizado = await prisma.repositorio.update({
+      where: { id: repoId },
+      data: { setup_status: 'PENDENTE', setup_erro: null },
+    });
+
+    await enqueueRepoSetupJob(repoId);
+
+    return reply.send({ success: true, repositorio: serializeBigInt(atualizado) });
   });
 
   // ==========================================

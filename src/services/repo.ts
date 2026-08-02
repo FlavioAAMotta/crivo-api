@@ -5,6 +5,12 @@ import { logger } from '../lib/logger.js';
 import { enqueueRepoSetupJob } from '../jobs/queues.js';
 
 /**
+ * Nome fixo do ruleset de proteção da main — usado também para checar idempotência
+ * (ver D14 em DECISOES.md) antes de criar, já que POST /rulesets não é idempotente.
+ */
+const MAIN_RULESET_NAME = 'protect-main';
+
+/**
  * Sanitizes and normalizes strings to make them safe for GitHub repository names.
  */
 export function sanitizeRepoName(name: string): string {
@@ -18,7 +24,7 @@ export function sanitizeRepoName(name: string): string {
 /**
  * Executes the post-creation sequence for a generated repository with polling retries.
  * Polling checks if the template contents have been fully populated (so 'main' branch exists),
- * then applies branch protection and adds the student(s) as push collaborator(s).
+ * then applies a protection ruleset and adds the student(s) as push collaborator(s).
  *
  * Lança em caso de falha — quem chama (o worker `repo-setup`) cuida do retry.
  */
@@ -71,26 +77,43 @@ async function runPostCreationSequence(repoName: string, studentLogins: string[]
     );
   }
   
-  // 2. Protect main branch (block force push and deletions)
-  logger.info({ repoName }, 'Applying branch protection to main');
-  await withGithubRetry(() =>
-    octokit.rest.repos.updateBranchProtection({
+  // 2. Protect main branch via Repository Ruleset (bloqueia force-push e deleção).
+  // A API clássica de branch protection (updateBranchProtection) exige GitHub
+  // Pro/Team/Enterprise em repositório PRIVADO — a org está no plano Free (ver D14).
+  // Rulesets cobrem o mesmo requisito real (D2: reescrita de histórico = adulteração
+  // de evidência) e são gratuitos em qualquer plano, inclusive privado.
+  logger.info({ repoName }, 'Applying protection ruleset to main');
+  await withGithubRetry(async () => {
+    // POST /rulesets não é idempotente — se um retry anterior já criou o ruleset
+    // (ex.: a resposta se perdeu antes de confirmar), checar por nome evita 422.
+    const { data: existing } = await octokit.rest.repos.getRepoRulesets({
       owner: org,
       repo: repoName,
-      branch: 'main',
-      enforce_admins: true, // Blocks force push for everyone, including admin tokens
-      required_status_checks: null,
-      required_pull_request_reviews: null,
-      restrictions: null,
-    })
-  );
+    });
+    if (existing.some((r) => r.name === MAIN_RULESET_NAME)) {
+      logger.debug({ repoName }, 'protect-main ruleset already exists, skipping creation');
+      return;
+    }
+
+    await octokit.rest.repos.createRepoRuleset({
+      owner: org,
+      repo: repoName,
+      name: MAIN_RULESET_NAME,
+      target: 'branch',
+      enforcement: 'active',
+      conditions: {
+        ref_name: { include: ['refs/heads/main'], exclude: [] },
+      },
+      rules: [{ type: 'non_fast_forward' }, { type: 'deletion' }],
+    });
+  });
   
   logger.info({ repoName }, 'Post-creation sequence completed successfully');
 }
 
 /**
  * Configura um repositório já criado: aguarda a branch main, adiciona colaboradores e
- * aplica branch protection. Em sucesso marca CONFIGURADO; em falha propaga o erro para
+ * aplica o ruleset de proteção. Em sucesso marca CONFIGURADO; em falha propaga o erro para
  * o worker decidir entre novo retry e marcar ERRO (ver markRepoSetupFailed).
  */
 export async function configureRepository(repoId: number) {

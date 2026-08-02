@@ -93,7 +93,7 @@ export const detectorWorker = new Worker(
   { connection: connectionOptions }
 );
 
-// 3. Repo Setup Worker (colaboradores + branch protection, com retry/backoff)
+// 3. Repo Setup Worker (colaboradores + ruleset de proteção, com retry/backoff)
 export const repoSetupWorker = new Worker(
   'repo-setup',
   async (job: Job) => {

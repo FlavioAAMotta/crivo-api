@@ -91,7 +91,7 @@ Rodar após qualquer mudança estrutural (deploy novo, rotação de chaves, migr
 5. Conta GitHub **aluno-teste** separada (rotas de aluno checam ownership; testar como professor não exercita o caminho real). Login + e-mail de commit cadastrado.
 6. Template genérico na org com caixinha marcada.
 7. Como professor: disciplina → turma → matrícula do aluno-teste → trabalho com deadline daqui a ~15 min.
-8. Como aluno: `POST /trabalhos/:id/repositorio` → conferir no GitHub: repo na org, aluno collaborator, branch protection na main; no banco, `setup_status` saudável.
+8. Como aluno: `POST /trabalhos/:id/repositorio` → conferir no GitHub: repo na org, aluno collaborator, ruleset `protect-main` ativo na main (Settings → Rules → Rulesets; ver D14 — não é mais branch protection clássica, incompatível com plano Free em repo privado); no banco, `setup_status` saudável.
 9. Clonar com a conta-teste, commit, push → conferir cascata: `pushes` (pusher = aluno-teste) e `commits` com `stats_status` PENDENTE→CALCULADO.
 10. Forçar sinalização: `git -c user.name="Fulano" -c user.email="fulano@nada.com" commit --allow-empty -m t` + push → nascem AUTOR_NAO_RECONHECIDO e divergência individual. Revisar via PATCH com nota; conferir imutabilidade.
 11. Deadline vence → congelador varre (≤60s): tag `entrega-1` no GitHub + linha em `entregas`. Testar `?force=true` → `entrega-2`.
@@ -117,6 +117,8 @@ Ferramenta permanente: página do App → **Advanced → Recent Deliveries** —
 | 404 `Route GET:/app/auth/github not found` | `/app` sobrando na URL digitada (contaminação do caminho do contêiner) | Rotas são na raiz: `/auth/github` |
 | Tela GitHub "Be careful! The redirect_uri is not associated…" | Callback URL do App ≠ `APP_BASE_URL + /auth/github/callback` (localhost esquecido, barra final, `/app`) | Igualar caractere a caractere os dois lados; **Save changes**; se mexeu na variável, esperar o redeploy |
 | Login funciona mas papel vem ALUNO | `PROFESSOR_LOGINS` divergente do github_login | Corrigir variável (minúsculo); regra promove no próximo login |
+| `api`/`worker` em loop de restart, log `npm error EUSAGE ... npm ci` | `package-lock.json` ausente do diretório do projeto (o `docker-compose.yml` roda `npm ci` a cada start do container, não só na build) | `npm install --package-lock-only` na raiz de `crivo-api`, depois `docker compose up -d --force-recreate api worker`. Se o arquivo sumir sozinho de novo em máquina com OneDrive, suspeitar de Files On-Demand "des-baixando" o arquivo |
+| Repositório de aluno cai em `setup_status=ERRO` com erro de branch protection / "Upgrade to GitHub Pro" | API clássica de branch protection exige plano pago para repositório **privado** — a org está no Free (decisão, não vamos migrar) | Corrigido na raiz: proteção da main agora usa Repository Ruleset, gratuito em qualquer plano (ver D14). Repos presos em ERRO por essa causa antiga: `POST /prof/repositorios/:id/reprocessar-setup` — não precisa recriar o repo no GitHub |
 
 ## 10. Pendências registradas
 

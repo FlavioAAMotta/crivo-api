@@ -31,7 +31,7 @@ export const detectorQueue = new Queue('detector', {
 });
 
 /**
- * Sequência pós-criação de repositório (colaboradores + branch protection).
+ * Sequência pós-criação de repositório (colaboradores + ruleset de proteção).
  * Tentativas espaçadas porque o GitHub leva alguns segundos para popular o template.
  */
 export const repoSetupQueue = new Queue('repo-setup', {

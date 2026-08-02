@@ -24,7 +24,7 @@
 
 **Interpretação por contexto (não mover para regra única):** em repo INDIVIDUAL, divergência pontual já é sinal; em EQUIPE, divergência pontual é vida normal (par-programming) e o sinal é apenas o **padrão sistemático** (thresholds em `config.detectors`).
 
-**Muletas complementares:** force push bloqueado por branch protection desde o template (reescrita de histórico = adulteração de evidência) e sinalizado se ocorrer; e-mails de commit declarados pelo aluno no onboarding (`emails_commit`) — autor não reconhecido também sinaliza.
+**Muletas complementares:** force push bloqueado por ruleset na main desde a criação do repo (reescrita de histórico = adulteração de evidência — ver D14 para o mecanismo) e sinalizado se ocorrer; e-mails de commit declarados pelo aluno no onboarding (`emails_commit`) — autor não reconhecido também sinaliza.
 
 ## D3. Identidade de máquina: GitHub App, não PAT nem conta-robô
 
@@ -90,7 +90,7 @@
 
 ## D11. Falha de setup de repo é estado visível, não log
 
-**Decisão:** pós-criação (poll da main, collaborator, branch protection) roda como job com 5 tentativas e backoff; esgotado, grava `setup_status=ERRO` + `setup_erro` no repositório, exposto na grade do professor.
+**Decisão:** pós-criação (poll da main, collaborator, ruleset de proteção) roda como job com 5 tentativas e backoff; esgotado, grava `setup_status=ERRO` + `setup_erro` no repositório, exposto na grade do professor. `POST /prof/repositorios/:id/reprocessar-setup` reabre o ciclo (volta a `PENDENTE` e reenfileira) sem exigir recriar o repositório no GitHub.
 
 **Justificativa:** o pior caso do "logar e seguir" é aluno sem acesso de push ou main sem proteção (furo de evidência) com a única testemunha numa linha de log que ninguém lê. Falha operacional relevante tem que aparecer onde o operador olha.
 
@@ -105,3 +105,17 @@
 **Decisão:** schema, rotas e variáveis usam o vocabulário do domínio em português (`trabalho`, `entrega`, `sinalizacao`...), sem mistura com termos ingleses equivalentes.
 
 **Justificativa:** o domínio é regulatório-acadêmico brasileiro (quem lê contestação, ata ou tela é falante de português); consistência evita o dialeto híbrido que confunde busca e manutenção.
+
+## D14. Proteção da main via Repository Ruleset, não branch protection clássica
+
+**Decisão:** `configureRepository()` protege a `main` criando um Repository Ruleset (`POST /repos/{owner}/{repo}/rulesets`, nome fixo `protect-main`) com as regras `non_fast_forward` e `deletion`, em vez de `PUT .../branches/main/protection` (branch protection clássica).
+
+**Contexto:** a API clássica de branch protection **exige GitHub Pro/Team/Enterprise para repositórios privados** — plano Free retorna erro ao tentar aplicá-la num repo privado. A org `faminas-ads` está no plano Free e **vai continuar** (decisão de custo, não técnica) — ver `OPERACAO.md §2`. Repositórios de aluno são privados por design (evidência de um aluno não é material de outro), então essa etapa falhava sistematicamente em produção real, deixando `setup_status=ERRO` em todo repo criado.
+
+**Justificativa:** Rulesets são gratuitos em qualquer plano, inclusive repositório privado, e cobrem exatamente o requisito real do sistema (D2: bloquear reescrita de histórico e deleção da main — não branch protection completa com PR review, status checks etc., que o Crivo nunca usou). Mesma permissão do GitHub App já cobre o endpoint (`Administration RW`, ver D3) — nenhuma mudança de escopo do App foi necessária.
+
+**Idempotência:** `POST /rulesets` não é idempotente como o antigo `PUT` era — chamar duas vezes cria conflito de nome. `runPostCreationSequence` lista os rulesets existentes e pula a criação se `protect-main` já existir, antes de criar. Isso é o que torna seguro reprocessar um repositório (`POST /prof/repositorios/:id/reprocessar-setup`) que já tinha avançado parcialmente numa tentativa anterior.
+
+**Rejeitado:** manter branch protection clássica e forçar upgrade de plano da org — custo recorrente rejeitado para um requisito que Rulesets cobrem de graça. Também rejeitado: aplicar a proteção só nos templates (não nos repos gerados) — geração por template não herda configuração de branch/ruleset do repo-fonte, a proteção tem que ser aplicada em cada repo criado, como já era o caso.
+
+**Migração dos repositórios de teste já em `ERRO` por essa causa:** não é necessário recriar o repositório no GitHub — `POST /prof/repositorios/:id/reprocessar-setup` volta o registro para `PENDENTE` e reenfileira `repo-setup`, que agora aplica o ruleset com sucesso no mesmo repositório já existente.

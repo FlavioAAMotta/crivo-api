@@ -42,7 +42,7 @@ export const config = {
       : 60_000,
   },
 
-  // Sequência pós-criação de repositório (colaboradores + branch protection)
+  // Sequência pós-criação de repositório (colaboradores + ruleset de proteção)
   repoSetup: {
     attempts: 5,
     backoffMs: 10_000,
