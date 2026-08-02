@@ -38,11 +38,27 @@ describe('GET /auth/github/callback', () => {
     vi.unstubAllGlobals();
   });
 
-  it('sem state: fluxo normal continua funcionando e agora redireciona pro front', async () => {
+  it('sem state, aluno desconhecido: não cria conta-fantasma, redireciona pedindo primeiro acesso por RA', async () => {
     mockFetchSequence({ id: 555, login: 'novo-aluno', name: 'Novo Aluno' });
     vi.mocked(prisma.usuario.findUnique).mockResolvedValue(null);
-    vi.mocked(prisma.usuario.create).mockResolvedValue({
-      id: 1, github_id: 555n, github_login: 'novo-aluno', nome: 'Novo Aluno', papel: 'ALUNO',
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/github/callback?code=abc',
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:5173/auth/callback?error=faca_primeiro_acesso_com_ra');
+    expect(prisma.usuario.create).not.toHaveBeenCalled();
+  });
+
+  it('sem state, usuário já existente (por github_id): login normal continua funcionando', async () => {
+    mockFetchSequence({ id: 555, login: 'aluno-existente', name: 'Aluno Existente' });
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      id: 7, github_id: 555n, github_login: 'aluno-existente', nome: 'Aluno Existente', papel: 'ALUNO',
+    } as any);
+    vi.mocked(prisma.usuario.update).mockResolvedValue({
+      id: 7, github_id: 555n, github_login: 'aluno-existente', nome: 'Aluno Existente', papel: 'ALUNO',
     } as any);
 
     const response = await app.inject({
@@ -54,7 +70,7 @@ describe('GET /auth/github/callback', () => {
     expect(response.headers.location).toContain('http://localhost:5173/auth/callback?token=');
   });
 
-  it('state inválido: 401', async () => {
+  it('state inválido: redireciona pro front com ?error=token_invalido (chegou por navegação de página inteira, não JSON)', async () => {
     mockFetchSequence({ id: 555, login: 'x', name: 'X' });
 
     const response = await app.inject({
@@ -62,10 +78,11 @@ describe('GET /auth/github/callback', () => {
       url: '/auth/github/callback?code=abc&state=token-invalido',
     });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:5173/auth/callback?error=token_invalido');
   });
 
-  it('state com etapa errada (redefinir_senha): 400', async () => {
+  it('state com etapa errada (redefinir_senha): redireciona com ?error=etapa_incorreta', async () => {
     mockFetchSequence({ id: 555, login: 'x', name: 'X' });
     const state = signPreAuthToken({ usuario_id: 40, etapa: 'redefinir_senha' });
 
@@ -74,10 +91,11 @@ describe('GET /auth/github/callback', () => {
       url: `/auth/github/callback?code=abc&state=${state}`,
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:5173/auth/callback?error=etapa_incorreta');
   });
 
-  it('github_id já pertence a outro usuário: 409, nenhuma escrita', async () => {
+  it('github_id já pertence a outro usuário: redireciona com ?error=github_ja_vinculado, nenhuma escrita', async () => {
     mockFetchSequence({ id: 555, login: 'ja-de-outro', name: 'X' });
     const state = signPreAuthToken({ usuario_id: 40, etapa: 'vincular_github' });
     vi.mocked(prisma.usuario.findUnique).mockResolvedValue({ id: 99, github_id: 555n } as any);
@@ -87,7 +105,8 @@ describe('GET /auth/github/callback', () => {
       url: `/auth/github/callback?code=abc&state=${state}`,
     });
 
-    expect(response.statusCode).toBe(409);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:5173/auth/callback?error=github_ja_vinculado');
     expect(prisma.usuario.update).not.toHaveBeenCalled();
   });
 

@@ -32,6 +32,15 @@ const deleteEmailParamsSchema = z.object({
   id: z.string().transform(Number),
 });
 
+/**
+ * Hash bcrypt real (60 chars, custo 10) contra o qual comparamos senhas nos caminhos
+ * de falha que não teriam nenhum bcrypt a fazer. Precisa ser um hash VÁLIDO: o bcryptjs
+ * detecta hash malformado e retorna na hora, sem gastar as ~50ms do trabalho de verdade —
+ * era exatamente esse curto-circuito que deixava "RA não existe" (~0.2ms) distinguível de
+ * "senha errada" (~50ms) por cronômetro. Calculado uma vez, no import.
+ */
+const DUMMY_HASH = bcrypt.hashSync('never-matches-anything', 10);
+
 export async function authRoutes(fastify: FastifyInstance) {
 
   // 1. Redirect to GitHub OAuth Authorization Page
@@ -118,28 +127,27 @@ export async function authRoutes(fastify: FastifyInstance) {
       const { state } = parseResult.data;
 
       if (state) {
+        // O usuário chega aqui por redirect de página inteira vindo do GitHub: responder
+        // JSON o deixaria olhando uma resposta de API crua, sem caminho de volta. Toda
+        // falha volta pro front com ?error=<codigo>, que a CallbackPage traduz.
         let preAuth;
         try {
           preAuth = verifyPreAuthToken(state);
         } catch {
-          reply.status(401).send({ error: 'Token de pré-ativação inválido ou expirado' });
-          return;
+          return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=token_invalido`);
         }
         if (preAuth.etapa !== 'vincular_github') {
-          reply.status(400).send({ error: "Etapa incorreta: esperado 'vincular_github'" });
-          return;
+          return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=etapa_incorreta`);
         }
 
         const conflito = await prisma.usuario.findUnique({ where: { github_id: githubId } });
         if (conflito && conflito.id !== preAuth.usuario_id) {
-          reply.status(409).send({ error: 'Esta conta do GitHub já está vinculada a outro usuário' });
-          return;
+          return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=github_ja_vinculado`);
         }
 
         const usuarioPendente = await prisma.usuario.findUnique({ where: { id: preAuth.usuario_id } });
         if (!usuarioPendente) {
-          reply.status(404).send({ error: 'Usuário pendente não encontrado' });
-          return;
+          return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=usuario_nao_encontrado`);
         }
 
         const vinculado = await prisma.usuario.update({
@@ -191,10 +199,11 @@ export async function authRoutes(fastify: FastifyInstance) {
             papel,
           },
         });
-      } else {
-        // First login: check predefined lists
-        papel = isPredefinedProf ? 'PROFESSOR' : 'ALUNO';
-        
+      } else if (isPredefinedProf) {
+        // Primeiro login de professor: a lista PROFESSOR_LOGINS é a única porta de
+        // auto-criação que sobrou no OAuth puro.
+        papel = 'PROFESSOR';
+
         user = await prisma.usuario.create({
           data: {
             github_id: githubId,
@@ -203,6 +212,17 @@ export async function authRoutes(fastify: FastifyInstance) {
             papel,
           },
         });
+      } else {
+        // Aluno desconhecido entrando por "Entrar com GitHub" direto: NÃO criamos nada.
+        // Criar aqui geraria uma conta-fantasma com matricula: null, desconectada da
+        // conta por RA do mesmo aluno (e das matrículas dela) — e, pior, sequestraria o
+        // github_id, fazendo o vínculo da conta real falhar com 409 para sempre.
+        // Aluno tem uma porta só: import por RA + login-ra → redefinir-senha → vincular.
+        logger.warn(
+          { githubLogin },
+          'Login por GitHub de aluno não cadastrado — redirecionando para o primeiro acesso por RA',
+        );
+        return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=faca_primeiro_acesso_com_ra`);
       }
       
       // Fetch user's emails from GitHub to prepopulate their commit_emails if possible
@@ -271,7 +291,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     // parecido com o caminho de senha errada, para não vazar por timing quais
     // RAs estão cadastrados.
     if (!usuario || usuario.papel !== 'ALUNO') {
-      await bcrypt.compare(senha, '$2a$10$invalidinvalidinvalidu.invalidinvalidinva');
+      await bcrypt.compare(senha, DUMMY_HASH);
       reply.status(401).send({ error: 'Credenciais inválidas' });
       return;
     }
@@ -283,6 +303,10 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     if (usuario.senha_hash === null) {
       if (senha !== ra) {
+        // Comparação de string pura custa ~0ms: sem este bcrypt dummy, "RA existe mas a
+        // senha inicial está errada" seria o caminho mais rápido de todos e denunciaria,
+        // por tempo de resposta, quais RAs estão cadastrados e ainda não ativados.
+        await bcrypt.compare(senha, DUMMY_HASH);
         reply.status(401).send({ error: 'Credenciais inválidas' });
         return;
       }

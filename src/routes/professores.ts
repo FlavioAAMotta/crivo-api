@@ -248,6 +248,45 @@ export async function professorRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, usuario: serializeBigInt(atualizado) });
   });
 
+  // Escape hatch para o caso que o resetar-senha não cobre: o aluno vinculou a conta
+  // ERRADA do GitHub (pessoal em vez da institucional, ou simplesmente outra). Desfaz o
+  // vínculo e devolve a conta ao estado de primeiro acesso — o aluno refaz login-ra
+  // (senha = RA) → redefinir-senha → vincular-github, agora com a conta certa.
+  fastify.post('/prof/alunos/:id/desvincular-github', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Desfaz o vínculo do GitHub de um aluno e devolve a conta ao primeiro acesso (escape hatch)',
+      security: AUTH_SECURITY,
+      params: docSchema(alunoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id } = alunoIdParamsSchema.parse(request.params);
+
+    const aluno = await prisma.usuario.findUnique({ where: { id } });
+    if (!aluno || aluno.papel !== 'ALUNO') {
+      reply.status(404).send({ error: 'Aluno not found' });
+      return;
+    }
+    if (aluno.github_id === null) {
+      reply.status(409).send({
+        error: 'Aluno não está vinculado ao GitHub — nada a desvincular. Use resetar-senha se ele também precisa de nova senha inicial.',
+      });
+      return;
+    }
+
+    const atualizado = await prisma.usuario.update({
+      where: { id },
+      data: {
+        github_id: null,
+        github_login: null,
+        senha_hash: null,
+        senha_redefinida_em: null,
+      },
+    });
+
+    return reply.send({ success: true, usuario: serializeBigInt(atualizado) });
+  });
+
   // ==========================================
   // 4. CRUD Trabalhos
   // ==========================================
