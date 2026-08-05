@@ -34,8 +34,16 @@ export function buildApp() {
   // credentials: a sessão nesse caminho vai por Bearer token (localStorage), não
   // pelo cookie httpOnly (que não sobrevive cross-site com SameSite=Lax mesmo). Ver
   // D15 em docs/DECISOES.md.
+  //
+  // `methods` e `allowedHeaders` são explícitos de propósito: o default do
+  // @fastify/cors libera só GET/HEAD/POST, o que bloqueia no preflight o PATCH
+  // (revisar sinalização) e o DELETE (remover e-mail de commit). `Content-Type`
+  // é necessário porque `application/json` não é um valor safelisted, e
+  // `Authorization` porque a sessão vai por Bearer.
   fastify.register(cors, {
     origin: config.FRONTEND_URL,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   // Register OpenAPI docs (served at /docs)
