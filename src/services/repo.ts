@@ -11,6 +11,22 @@ import { enqueueRepoSetupJob } from '../jobs/queues.js';
 const MAIN_RULESET_NAME = 'protect-main';
 
 /**
+ * A premissa de D14 (rulesets são gratuitos em repo privado) não vale para uma
+ * ORGANIZAÇÃO no plano Free: rulesets em repositórios privados de org exigem
+ * Team/Enterprise. Nesse caso o GitHub responde 403 com "Upgrade to GitHub Pro
+ * or make this repository public to enable this feature". Isso é uma limitação
+ * de plano, não uma falha do setup — o repositório funciona (colaboradores já
+ * têm push), só não fica com a proteção aplicada.
+ */
+function isPlanLimitation(err: any): boolean {
+  const msg = String(err?.message ?? '');
+  return (
+    err?.status === 403 &&
+    (/upgrade to github/i.test(msg) || /make this repository public/i.test(msg))
+  );
+}
+
+/**
  * Sanitizes and normalizes strings to make them safe for GitHub repository names.
  */
 export function sanitizeRepoName(name: string): string {
@@ -78,36 +94,56 @@ async function runPostCreationSequence(repoName: string, studentLogins: string[]
   }
   
   // 2. Protect main branch via Repository Ruleset (bloqueia force-push e deleção).
-  // A API clássica de branch protection (updateBranchProtection) exige GitHub
-  // Pro/Team/Enterprise em repositório PRIVADO — a org está no plano Free (ver D14).
-  // Rulesets cobrem o mesmo requisito real (D2: reescrita de histórico = adulteração
-  // de evidência) e são gratuitos em qualquer plano, inclusive privado.
+  //
+  // Best-effort DE PROPÓSITO: proteger a main é PREVENÇÃO. O detector de
+  // force-push (D2) ainda pega reescrita de histórico DEPOIS do fato via webhook,
+  // então a garantia de integridade não depende do ruleset. Se a proteção não
+  // puder ser aplicada — tipicamente org no plano Free com repo privado, onde
+  // rulesets não estão disponíveis (ver isPlanLimitation e D14) — o repositório
+  // continua utilizável (os colaboradores já foram adicionados no passo 1). Não
+  // falhamos o setup por isso: marcar ERRO num repo que funciona assustava
+  // professor e aluno com uma mensagem de acesso que não condiz com a realidade.
   logger.info({ repoName }, 'Applying protection ruleset to main');
-  await withGithubRetry(async () => {
-    // POST /rulesets não é idempotente — se um retry anterior já criou o ruleset
-    // (ex.: a resposta se perdeu antes de confirmar), checar por nome evita 422.
-    const { data: existing } = await octokit.rest.repos.getRepoRulesets({
-      owner: org,
-      repo: repoName,
-    });
-    if (existing.some((r) => r.name === MAIN_RULESET_NAME)) {
-      logger.debug({ repoName }, 'protect-main ruleset already exists, skipping creation');
-      return;
-    }
+  try {
+    await withGithubRetry(async () => {
+      // POST /rulesets não é idempotente — se um retry anterior já criou o ruleset
+      // (ex.: a resposta se perdeu antes de confirmar), checar por nome evita 422.
+      const { data: existing } = await octokit.rest.repos.getRepoRulesets({
+        owner: org,
+        repo: repoName,
+      });
+      if (existing.some((r) => r.name === MAIN_RULESET_NAME)) {
+        logger.debug({ repoName }, 'protect-main ruleset already exists, skipping creation');
+        return;
+      }
 
-    await octokit.rest.repos.createRepoRuleset({
-      owner: org,
-      repo: repoName,
-      name: MAIN_RULESET_NAME,
-      target: 'branch',
-      enforcement: 'active',
-      conditions: {
-        ref_name: { include: ['refs/heads/main'], exclude: [] },
-      },
-      rules: [{ type: 'non_fast_forward' }, { type: 'deletion' }],
+      await octokit.rest.repos.createRepoRuleset({
+        owner: org,
+        repo: repoName,
+        name: MAIN_RULESET_NAME,
+        target: 'branch',
+        enforcement: 'active',
+        conditions: {
+          ref_name: { include: ['refs/heads/main'], exclude: [] },
+        },
+        rules: [{ type: 'non_fast_forward' }, { type: 'deletion' }],
+      });
     });
-  });
-  
+    logger.info({ repoName }, 'Protection ruleset applied to main');
+  } catch (err: any) {
+    if (isPlanLimitation(err)) {
+      logger.warn(
+        { repoName },
+        'Proteção da main indisponível no plano/visibilidade atuais (org Free + repo privado). Repo configurado sem proteção; force-push segue detectável pelo webhook.',
+      );
+    } else {
+      logger.warn(
+        { repoName, err: err?.message },
+        'Falha ao aplicar o ruleset de proteção; seguindo sem proteção (repo utilizável).',
+      );
+    }
+  }
+
   logger.info({ repoName }, 'Post-creation sequence completed successfully');
 }
 

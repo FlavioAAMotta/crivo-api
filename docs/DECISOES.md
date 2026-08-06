@@ -24,7 +24,7 @@
 
 **Interpretação por contexto (não mover para regra única):** em repo INDIVIDUAL, divergência pontual já é sinal; em EQUIPE, divergência pontual é vida normal (par-programming) e o sinal é apenas o **padrão sistemático** (thresholds em `config.detectors`).
 
-**Muletas complementares:** force push bloqueado por ruleset na main desde a criação do repo (reescrita de histórico = adulteração de evidência — ver D14 para o mecanismo) e sinalizado se ocorrer; e-mails de commit declarados pelo aluno no onboarding (`emails_commit`) — autor não reconhecido também sinaliza.
+**Muletas complementares:** force push é **sinalizado** quando ocorre (reescrita de histórico = adulteração de evidência). O ideal seria *bloqueá-lo* por ruleset na main, mas isso não está disponível no plano atual (ver correção em D14) — a garantia é a **detecção** pelo webhook, não a prevenção; e-mails de commit declarados pelo aluno no onboarding (`emails_commit`) — autor não reconhecido também sinaliza.
 
 ## D3. Identidade de máquina: GitHub App, não PAT nem conta-robô
 
@@ -118,7 +118,11 @@
 
 **Rejeitado:** manter branch protection clássica e forçar upgrade de plano da org — custo recorrente rejeitado para um requisito que Rulesets cobrem de graça. Também rejeitado: aplicar a proteção só nos templates (não nos repos gerados) — geração por template não herda configuração de branch/ruleset do repo-fonte, a proteção tem que ser aplicada em cada repo criado, como já era o caso.
 
-**Migração dos repositórios de teste já em `ERRO` por essa causa:** não é necessário recriar o repositório no GitHub — `POST /prof/repositorios/:id/reprocessar-setup` volta o registro para `PENDENTE` e reenfileira `repo-setup`, que agora aplica o ruleset com sucesso no mesmo repositório já existente.
+**Migração dos repositórios de teste já em `ERRO` por essa causa:** não é necessário recriar o repositório no GitHub — `POST /prof/repositorios/:id/reprocessar-setup` volta o registro para `PENDENTE` e reenfileira `repo-setup`, que reaplica a sequência no mesmo repositório já existente.
+
+**Correção (2026-08): a premissa "rulesets grátis em repo privado" NÃO vale para uma ORGANIZAÇÃO no plano Free.** Rulesets em repositórios **privados de organização** exigem Team/Enterprise; numa org Free, `POST /rulesets` num repo privado retorna 403 `"Upgrade to GitHub Pro or make this repository public to enable this feature"`. Ou seja: nem branch protection clássica nem rulesets estão disponíveis para repo privado na org Free — a troca de mecanismo de D14 não resolveu, só mudou a mensagem de erro. Como upgrade e tornar público seguem rejeitados (custo / privacidade), **não há como *impor* proteção da main no plano atual.**
+
+Consequência no código (`runPostCreationSequence`): aplicar o ruleset virou **best-effort**. Adicionar os colaboradores é o passo essencial (define `CONFIGURADO`); se o ruleset falhar (limitação de plano ou qualquer outro motivo), loga aviso e segue — o repositório **funciona** (o aluno já tem push), então marcá-lo `ERRO` só assustava com uma mensagem de acesso que não condiz com a realidade. A garantia de integridade não depende do ruleset: proteger a main é **prevenção**, mas o **detector de force-push (D2) pega a reescrita de histórico depois do fato via webhook** — prevenção virou detecção, o sinal ainda dispara. Ver `isPlanLimitation` em `src/services/repo.ts` e `tests/repo_setup.test.ts`.
 
 ## D15. CORS liberado para a origem do front, sem credentials
 

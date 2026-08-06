@@ -62,7 +62,16 @@ export async function withGithubRetry<T>(fn: () => Promise<T>, retries = 3, dela
     return await fn();
   } catch (error: any) {
     const status = error.status;
-    const isRateLimit = status === 403 || status === 429;
+    // 429 é sempre rate-limit. Um 403 só é rate-limit quando traz os sinais de
+    // limite (retry-after, cota zerada, ou a mensagem). Um 403 de permissão ou
+    // de plano (ex.: "Upgrade to GitHub Pro...") NÃO resolve com retry — retentar
+    // só desperdiça backoff. Antes, todo 403 era retentado.
+    const isRateLimit =
+      status === 429 ||
+      (status === 403 &&
+        (error.headers?.['retry-after'] != null ||
+          error.headers?.['x-ratelimit-remaining'] === '0' ||
+          /rate limit/i.test(error.message ?? '')));
     const isServerError = status >= 500;
     
     if (retries > 0 && (isRateLimit || isServerError)) {
