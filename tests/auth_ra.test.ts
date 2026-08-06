@@ -46,21 +46,48 @@ describe('POST /auth/login-ra', () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it('rejeita quando já vinculado ao GitHub, orientando a usar GitHub', async () => {
+  it('já vinculado + senha correta: emite sessão completa (as duas formas de login liberadas)', async () => {
+    const bcrypt = await import('bcryptjs');
+    const hash = await bcrypt.hash('nova-senha-123', 10);
     vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
       ...ALUNO_PENDENTE,
       github_id: 999n,
       github_login: 'ja-vinculado',
+      senha_hash: hash,
     } as any);
 
     const response = await app.inject({
       method: 'POST',
       url: '/auth/login-ra',
-      payload: { ra: '25-99999', senha: '25-99999' },
+      payload: { ra: '25-99999', senha: 'nova-senha-123' },
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(JSON.parse(response.body).error).toContain('GitHub');
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.etapa).toBe('logado');
+    expect(typeof body.token).toBe('string');
+    expect(body.token.length).toBeGreaterThan(0);
+    // Sessão de verdade: seta o cookie `token`, igual ao callback do OAuth.
+    expect(response.cookies.some((c) => c.name === 'token')).toBe(true);
+  });
+
+  it('já vinculado + senha errada: continua rejeitando (401), não emite sessão', async () => {
+    const bcrypt = await import('bcryptjs');
+    const hash = await bcrypt.hash('nova-senha-123', 10);
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      ...ALUNO_PENDENTE,
+      github_id: 999n,
+      github_login: 'ja-vinculado',
+      senha_hash: hash,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/login-ra',
+      payload: { ra: '25-99999', senha: 'chute' },
+    });
+
+    expect(response.statusCode).toBe(401);
   });
 
   it('rejeita senha errada no primeiro acesso (senha != RA)', async () => {

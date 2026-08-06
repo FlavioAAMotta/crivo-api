@@ -299,11 +299,13 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 2b. Login inicial do aluno por RA — porta de entrada única antes do vínculo com GitHub
+  // 2b. Login do aluno por RA. No primeiro acesso encaminha para trocar senha /
+  // vincular GitHub; com a conta já vinculada, emite sessão completa (as duas
+  // formas de login ficam liberadas).
   fastify.post('/auth/login-ra', {
     schema: {
       tags: ['auth'],
-      summary: 'Login por RA (primeiro acesso do aluno, antes de vincular o GitHub)',
+      summary: 'Login por RA (primeiro acesso do aluno ou login completo de quem já vinculou o GitHub)',
       body: docSchema(loginRaBodySchema),
     },
   }, async (request, reply) => {
@@ -320,12 +322,9 @@ export async function authRoutes(fastify: FastifyInstance) {
       return;
     }
 
-    if (usuario.github_id) {
-      reply.status(409).send({ error: 'Esta conta já está vinculada ao GitHub — entre com GitHub.' });
-      return;
-    }
-
     if (usuario.senha_hash === null) {
+      // Primeiro acesso: a senha inicial é o próprio RA. Aqui a conta ainda não
+      // tem GitHub vinculado — vincular exige ter trocado a senha antes.
       if (senha !== ra) {
         // Comparação de string pura custa ~0ms: sem este bcrypt dummy, "RA existe mas a
         // senha inicial está errada" seria o caminho mais rápido de todos e denunciaria,
@@ -345,6 +344,29 @@ export async function authRoutes(fastify: FastifyInstance) {
       return;
     }
 
+    // Conta já vinculada ao GitHub: RA+senha passa a ser um login completo — as
+    // duas formas de entrar ficam liberadas (antes isto respondia 409 e forçava
+    // o GitHub). A atribuição de commit segue vindo do GitHub via EmailCommit; o
+    // RA é só mais um caminho para a mesma sessão.
+    if (usuario.github_id) {
+      const token = signToken({
+        id: usuario.id,
+        github_id: usuario.github_id,
+        github_login: usuario.github_login!,
+        papel: usuario.papel,
+      });
+      reply.setCookie('token', token, {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60,
+      });
+      reply.send({ token, etapa: 'logado' });
+      return;
+    }
+
+    // Senha já trocada, mas ainda sem GitHub: segue para o vínculo.
     const token = signPreAuthToken({ usuario_id: usuario.id, etapa: 'vincular_github' });
     reply.send({ preauth_token: token, etapa: 'vincular_github' });
   });
