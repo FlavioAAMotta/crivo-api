@@ -41,6 +41,48 @@ const deleteEmailParamsSchema = z.object({
  */
 const DUMMY_HASH = bcrypt.hashSync('never-matches-anything', 10);
 
+/**
+ * Busca os e-mails da conta do GitHub autorizada e os grava como e-mails de
+ * commit do usuário. É esse passo que liga os commits do aluno à matrícula dele:
+ * sem ele, todo commit vira "autor não reconhecido" e a etapa 1 do onboarding
+ * mostra a lista vazia. Precisa rodar nos DOIS caminhos do callback — no login
+ * direto (professor) e no vínculo por `state` (aluno) —, não só no primeiro.
+ *
+ * O `scope=user:email` pedido em /auth/github é o que libera este endpoint a
+ * devolver também os e-mails secundários/privados. Guardamos em minúsculas
+ * porque o webhook resolve o autor por `email.toLowerCase()`; qualquer diferença
+ * de caixa deixaria o commit sem dono. Falha aqui não derruba o vínculo: é
+ * best-effort e o aluno ainda pode adicionar o e-mail manualmente na etapa 1.
+ */
+async function prepopularEmailsDeCommit(usuarioId: number, accessToken: string): Promise<void> {
+  try {
+    const emailsResponse = await fetch('https://api.github.com/user/emails', {
+      headers: {
+        Authorization: `token ${accessToken}`,
+        'User-Agent': 'Crivo-API',
+      },
+    });
+
+    if (!emailsResponse.ok) {
+      logger.warn({ usuarioId, status: emailsResponse.status }, 'Não foi possível buscar e-mails do GitHub');
+      return;
+    }
+
+    const emailsList = await emailsResponse.json() as Array<{ email?: string; verified?: boolean }>;
+    for (const emailObj of emailsList) {
+      if (!emailObj.email) continue;
+      const email = emailObj.email.toLowerCase();
+      await prisma.emailCommit.upsert({
+        where: { email },
+        update: { verificado: emailObj.verified ?? false },
+        create: { usuario_id: usuarioId, email, verificado: emailObj.verified ?? false },
+      }).catch(() => {}); // e-mail já pertence a outro usuário (unique global): não reatribui
+    }
+  } catch (err) {
+    logger.warn({ usuarioId, err }, 'Falha ao prepopular e-mails de commit do GitHub');
+  }
+}
+
 export async function authRoutes(fastify: FastifyInstance) {
 
   // 1. Redirect to GitHub OAuth Authorization Page
@@ -155,6 +197,10 @@ export async function authRoutes(fastify: FastifyInstance) {
           data: { github_id: githubId, github_login: githubLogin },
         });
 
+        // Mesmo passo do login direto: sem isso o aluno recém-vinculado fica com
+        // zero e-mails e a etapa 1 do onboarding aparece vazia.
+        await prepopularEmailsDeCommit(vinculado.id, accessToken);
+
         const tokenVinculo = signToken({
           id: vinculado.id,
           github_id: vinculado.github_id!,
@@ -225,31 +271,9 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.redirect(`${config.FRONTEND_URL}/auth/callback?error=faca_primeiro_acesso_com_ra`);
       }
       
-      // Fetch user's emails from GitHub to prepopulate their commit_emails if possible
-      const emailsResponse = await fetch('https://api.github.com/user/emails', {
-        headers: {
-          Authorization: `token ${accessToken}`,
-          'User-Agent': 'Crivo-API',
-        },
-      });
-      
-      if (emailsResponse.ok) {
-        const emailsList = await emailsResponse.json() as any[];
-        for (const emailObj of emailsList) {
-          if (emailObj.email) {
-            await prisma.emailCommit.upsert({
-              where: { email: emailObj.email },
-              update: { verificado: emailObj.verified },
-              create: {
-                usuario_id: user.id,
-                email: emailObj.email,
-                verificado: emailObj.verified,
-              },
-            }).catch(() => {}); // Suppress duplicate conflicts across different users
-          }
-        }
-      }
-      
+      // Prepopula os e-mails de commit a partir da conta do GitHub (ver helper).
+      await prepopularEmailsDeCommit(user.id, accessToken);
+
       // Generate JWT Token
       const token = signToken({
         id: user.id,

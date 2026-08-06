@@ -137,4 +137,46 @@ describe('GET /auth/github/callback', () => {
       data: { github_id: 555n, github_login: 'aluno-vinculando' },
     });
   });
+
+  it('vínculo: prepopula os e-mails do GitHub sob o id do aluno vinculado, em minúsculas (regressão: etapa 1 vazia)', async () => {
+    // Bug relatado: aluno vinculava o GitHub e a etapa 1 do onboarding mostrava
+    // "nenhum e-mail". O ramo de vínculo não buscava os e-mails — só o login direto.
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce({ json: async () => ({ access_token: 'tok' }) }); // troca de code
+    fetchMock.mockResolvedValueOnce({ json: async () => ({ id: 555, login: 'aluno-vinculando', name: 'A' }) }); // perfil
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        { email: 'Joao.Silva@Gmail.com', verified: true },
+        { email: '123+aluno@users.noreply.github.com', verified: false },
+      ],
+    }); // e-mails do GitHub
+    vi.stubGlobal('fetch', fetchMock);
+
+    const state = signPreAuthToken({ usuario_id: 40, etapa: 'vincular_github' });
+    vi.mocked(prisma.usuario.findUnique)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 40, papel: 'ALUNO' } as any);
+    vi.mocked(prisma.usuario.update).mockResolvedValue({
+      id: 40, github_id: 555n, github_login: 'aluno-vinculando', papel: 'ALUNO',
+    } as any);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/github/callback?code=abc&state=${state}`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(prisma.emailCommit.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email: 'joao.silva@gmail.com' },
+        create: expect.objectContaining({ usuario_id: 40, email: 'joao.silva@gmail.com', verificado: true }),
+      }),
+    );
+    expect(prisma.emailCommit.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ usuario_id: 40, email: '123+aluno@users.noreply.github.com' }),
+      }),
+    );
+  });
 });
