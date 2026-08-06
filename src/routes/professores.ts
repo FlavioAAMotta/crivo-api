@@ -248,6 +248,35 @@ export async function professorRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, usuario: serializeBigInt(atualizado) });
   });
 
+  fastify.post('/prof/alunos/:id/resetar-acesso', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Devolve um aluno ao estado de primeiro acesso, removendo senha e vínculo do GitHub',
+      security: AUTH_SECURITY,
+      params: docSchema(alunoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id } = alunoIdParamsSchema.parse(request.params);
+
+    const aluno = await prisma.usuario.findUnique({ where: { id } });
+    if (!aluno || aluno.papel !== 'ALUNO') {
+      reply.status(404).send({ error: 'Aluno not found' });
+      return;
+    }
+
+    await prisma.usuario.update({
+      where: { id },
+      data: {
+        github_id: null,
+        github_login: null,
+        senha_hash: null,
+        senha_redefinida_em: null,
+      },
+    });
+
+    return reply.send({ success: true });
+  });
+
   // Escape hatch para o caso que o resetar-senha não cobre: o aluno vinculou a conta
   // ERRADA do GitHub (pessoal em vez da institucional, ou simplesmente outra). Desfaz o
   // vínculo e devolve a conta ao estado de primeiro acesso — o aluno refaz login-ra

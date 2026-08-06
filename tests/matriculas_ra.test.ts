@@ -163,3 +163,50 @@ describe('POST /prof/alunos/:id/resetar-senha', () => {
     });
   });
 });
+
+describe('POST /prof/alunos/:id/resetar-acesso', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('remove senha e vínculo do GitHub para refazer o primeiro acesso', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      id: 50, papel: 'ALUNO', github_id: 123n, github_login: 'breno',
+    } as any);
+    vi.mocked(prisma.usuario.update).mockResolvedValue({ id: 50 } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/alunos/50/resetar-acesso',
+      headers: authProf,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prisma.usuario.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: {
+        github_id: null,
+        github_login: null,
+        senha_hash: null,
+        senha_redefinida_em: null,
+      },
+    });
+  });
+
+  it('404 quando o usuário não é aluno', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      id: 1, papel: 'PROFESSOR',
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/alunos/1/resetar-acesso',
+      headers: authProf,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(prisma.usuario.update).not.toHaveBeenCalled();
+  });
+});
