@@ -13,7 +13,9 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     usuario: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     matricula: { upsert: vi.fn(), findMany: vi.fn() },
-    repositorio: { findUnique: vi.fn(), delete: vi.fn() },
+    trabalho: { findFirst: vi.fn() },
+    equipe: { findMany: vi.fn() },
+    repositorio: { findUnique: vi.fn(), findMany: vi.fn(), delete: vi.fn() },
   },
 }));
 
@@ -285,5 +287,57 @@ describe('DELETE /prof/repositorios/:id', () => {
 
     expect(response.statusCode).toBe(204);
     expect(prisma.repositorio.delete).toHaveBeenCalledWith({ where: { id: 20 } });
+  });
+});
+
+describe('GET /prof/turmas/:id/grade após reset de acesso', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('usa o RA no membro de repo individual quando github_login é nulo', async () => {
+    vi.mocked(prisma.trabalho.findFirst).mockResolvedValue({
+      id: 7,
+      turma_id: 5,
+      tipo: 'INDIVIDUAL',
+      janela_inicio: new Date(),
+      deadline: new Date(Date.now() + 86_400_000),
+      congelamento_automatico: true,
+    } as any);
+    vi.mocked(prisma.repositorio.findMany).mockResolvedValue([{
+      id: 20,
+      nome_completo: 'faminas-ads/trabalho-aluno',
+      dono_tipo: 'ALUNO',
+      usuario_id: 50,
+      usuario: {
+        id: 50,
+        nome: 'Breno Moreira Soares',
+        matricula: '25-13353',
+        github_login: null,
+      },
+      equipe: null,
+      entregas: [],
+      sinalizacoes: [],
+      pushes: [],
+      commits: [],
+      setup_status: 'CONFIGURADO',
+      setup_erro: null,
+    }] as any);
+    vi.mocked(prisma.matricula.findMany).mockResolvedValue([{
+      usuario_id: 50,
+      turma_id: 5,
+      usuario: { id: 50, nome: 'Breno Moreira Soares', matricula: '25-13353' },
+    }] as any);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/prof/turmas/5/grade?trabalho_id=7',
+      headers: authProf,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)[0].membros).toEqual(['25-13353']);
   });
 });

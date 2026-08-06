@@ -431,7 +431,9 @@ export async function professorRoutes(fastify: FastifyInstance) {
       
       if (r.dono_tipo === 'ALUNO' && r.usuario) {
         donoLabel = r.usuario.nome;
-        membros = [r.usuario.github_login!];
+        // O vínculo pode ser removido pelo reset de acesso enquanto o repositório
+        // continua existindo. Nunca envie null: a UI usa estes valores em avatares.
+        membros = [r.usuario.github_login ?? r.usuario.matricula ?? '(sem login)'];
       } else if (r.dono_tipo === 'EQUIPE' && r.equipe) {
         donoLabel = `Equipe: ${r.equipe.nome}`;
         membros = r.equipe.membros.map(m => m.usuario.github_login ?? m.usuario.matricula ?? '(sem login)');
