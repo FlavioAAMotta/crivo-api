@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
+import { isBotLogin } from '../lib/identity.js';
 import { SinalizacaoTipo, SinalizacaoIntensidade } from '@prisma/client';
 
 /**
@@ -109,13 +110,15 @@ async function detectDivergencia(repo: any) {
     const owner = repo.usuario;
     if (!owner) return;
     
-    // Check Pushes: any push where pusher_github_id !== owner.github_id
-    const suspiciousPushes = await prisma.push.findMany({
+    // Check Pushes: any push where pusher_github_id !== owner.github_id.
+    // Bots são excluídos: o scaffold do template é empurrado pela GitHub App,
+    // que nunca é o dono — sem esse filtro, todo repo individual seria flagado.
+    const suspiciousPushes = (await prisma.push.findMany({
       where: {
         repositorio_id: repoId,
         pusher_github_id: { not: owner.github_id! },
       },
-    });
+    })).filter((p) => !isBotLogin(p.pusher_login));
 
     if (suspiciousPushes.length > 0) {
       const lastPush = suspiciousPushes[suspiciousPushes.length - 1];
@@ -173,11 +176,12 @@ async function detectDivergencia(repo: any) {
       return;
     }
 
-    // Aggregate pushes by pusher
-    const pushes = await prisma.push.findMany({
+    // Aggregate pushes by pusher — bots fora, pelo mesmo motivo: o push de
+    // scaffold do bot não deve contar nem no total nem como pusher dominante.
+    const pushes = (await prisma.push.findMany({
       where: { repositorio_id: repoId },
-    });
-    
+    })).filter((p) => !isBotLogin(p.pusher_login));
+
     const totalPushes = pushes.length;
     if (totalPushes === 0) return;
 
@@ -364,12 +368,16 @@ async function detectForcePush(repo: any) {
 async function detectAutorNaoReconhecido(repo: any) {
   const repoId = repo.id;
 
-  const unrecognizedCommits = await prisma.commit.findMany({
+  // O commit de scaffold do template tem autor não vinculado (o bot) — mas não é
+  // um aluno com e-mail mal configurado, é infraestrutura. Excluímos commits
+  // cujo push veio de um bot para não flagar o scaffold em todo repositório.
+  const unrecognizedCommits = (await prisma.commit.findMany({
     where: {
       repositorio_id: repoId,
       autor_usuario_id: null,
     },
-  });
+    include: { push: true },
+  })).filter((c) => !isBotLogin(c.push.pusher_login));
 
   if (unrecognizedCommits.length > 0) {
     const lastCommit = unrecognizedCommits[unrecognizedCommits.length - 1];

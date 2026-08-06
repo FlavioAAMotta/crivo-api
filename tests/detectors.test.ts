@@ -19,13 +19,38 @@ vi.mock('../src/lib/prisma.js', () => {
       },
       commit: {
         findMany: vi.fn(),
+        findFirst: vi.fn(),
         count: vi.fn(),
         groupBy: vi.fn(),
         aggregate: vi.fn(),
       },
+      entrega: {
+        findFirst: vi.fn(),
+      },
     },
   };
 });
+
+/**
+ * Deixa todos os detectores rodarem sem disparar nada por acidente, para que um
+ * teste isole o detector que quer verificar. Cada teste sobrescreve só o que
+ * precisa depois de chamar isto.
+ */
+function mockChainBenigno() {
+  vi.mocked(prisma.sinalizacao.findFirst).mockResolvedValue(null as any);
+  vi.mocked(prisma.entrega.findFirst).mockResolvedValue(null as any);
+  // Commit recente do próprio dono => sem SEM_ATIVIDADE.
+  vi.mocked(prisma.commit.findFirst).mockResolvedValue({ committed_em: new Date() } as any);
+  // Sem linhas calculadas => COMMIT_GIGANTE retorna cedo.
+  vi.mocked(prisma.commit.aggregate).mockResolvedValue({ _sum: { additions: 0 } } as any);
+  vi.mocked(prisma.commit.count).mockResolvedValue(0 as any);
+  vi.mocked(prisma.commit.groupBy).mockResolvedValue([] as any);
+  // push.findMany é chamado pela divergência e pelo force-push (where.forced).
+  // Sem forçar nada por padrão; cada teste ajusta o ramo da divergência.
+  vi.mocked(prisma.push.findMany).mockImplementation(((args: any) =>
+    Promise.resolve(args?.where?.forced ? [] : [])) as any);
+  vi.mocked(prisma.commit.findMany).mockResolvedValue([] as any);
+}
 
 describe('Anomaly Detectors Engine', () => {
   beforeEach(() => {
@@ -137,5 +162,92 @@ describe('Anomaly Detectors Engine', () => {
         }),
       }),
     });
+  });
+
+  // O bug relatado: o commit de scaffold que a GitHub App cria ao gerar o repo
+  // do template é empurrado por `crivo-faminas[bot]`, que nunca é o dono.
+  const REPO_INDIVIDUAL = {
+    id: 1,
+    dono_tipo: 'ALUNO',
+    usuario: { id: 42, github_id: 100n, github_login: 'student-owner', nome: 'Student Owner' },
+    trabalho: { janela_inicio: '2026-07-01T00:00:00Z', deadline: '2026-07-20T00:00:00Z' },
+  };
+
+  it('NÃO flaga DIVERGENCIA quando o único pusher divergente é um bot (scaffold do template)', async () => {
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue(REPO_INDIVIDUAL as any);
+    mockChainBenigno();
+
+    // A divergência buscaria este push (id != dono), mas é o bot do template.
+    vi.mocked(prisma.push.findMany).mockImplementation(((args: any) =>
+      Promise.resolve(
+        args?.where?.forced
+          ? []
+          : [{ id: 9, pusher_github_id: 999n, pusher_login: 'crivo-faminas[bot]', forced: false }],
+      )) as any);
+
+    await runDetectors(1, 'push');
+
+    const criouDivergencia = vi
+      .mocked(prisma.sinalizacao.create)
+      .mock.calls.some((c) => (c[0] as any).data.tipo === 'DIVERGENCIA_PUSHER_AUTOR');
+    expect(criouDivergencia).toBe(false);
+  });
+
+  it('ainda flaga DIVERGENCIA para pusher humano estranho (não sobre-filtra)', async () => {
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue(REPO_INDIVIDUAL as any);
+    mockChainBenigno();
+
+    vi.mocked(prisma.push.findMany).mockImplementation(((args: any) =>
+      Promise.resolve(
+        args?.where?.forced
+          ? []
+          : [{ id: 9, pusher_github_id: 999n, pusher_login: 'colega-humano', forced: false }],
+      )) as any);
+
+    await runDetectors(1, 'push');
+
+    const criouDivergencia = vi
+      .mocked(prisma.sinalizacao.create)
+      .mock.calls.some((c) => (c[0] as any).data.tipo === 'DIVERGENCIA_PUSHER_AUTOR');
+    expect(criouDivergencia).toBe(true);
+  });
+
+  it('NÃO flaga AUTOR_NAO_RECONHECIDO para o commit de scaffold do bot', async () => {
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue(REPO_INDIVIDUAL as any);
+    mockChainBenigno();
+
+    // Commit sem autor vinculado, mas empurrado pelo bot => scaffold, não aluno.
+    vi.mocked(prisma.commit.findMany).mockImplementation(((args: any) =>
+      Promise.resolve(
+        args?.where?.autor_usuario_id === null
+          ? [{ sha: 'scaffold', autor_nome: 'crivo-faminas[bot]', autor_email: 'bot@github', committed_em: new Date(), push: { pusher_login: 'crivo-faminas[bot]' } }]
+          : [],
+      )) as any);
+
+    await runDetectors(1, 'push');
+
+    const criouAutor = vi
+      .mocked(prisma.sinalizacao.create)
+      .mock.calls.some((c) => (c[0] as any).data.tipo === 'AUTOR_NAO_RECONHECIDO');
+    expect(criouAutor).toBe(false);
+  });
+
+  it('ainda flaga AUTOR_NAO_RECONHECIDO para aluno com e-mail não vinculado (push humano)', async () => {
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue(REPO_INDIVIDUAL as any);
+    mockChainBenigno();
+
+    vi.mocked(prisma.commit.findMany).mockImplementation(((args: any) =>
+      Promise.resolve(
+        args?.where?.autor_usuario_id === null
+          ? [{ sha: 'abc1234', autor_nome: 'Aluno Sem Email', autor_email: 'root@localhost', committed_em: new Date(), push: { pusher_login: 'student-owner' } }]
+          : [],
+      )) as any);
+
+    await runDetectors(1, 'push');
+
+    const criouAutor = vi
+      .mocked(prisma.sinalizacao.create)
+      .mock.calls.some((c) => (c[0] as any).data.tipo === 'AUTOR_NAO_RECONHECIDO');
+    expect(criouAutor).toBe(true);
   });
 });

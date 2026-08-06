@@ -207,6 +207,52 @@ describe('POST /webhooks/github', () => {
     expect(enqueueDetectorJob).toHaveBeenCalledWith(1, 'push');
   });
 
+  // O commit de scaffold que a GitHub App cria ao gerar o repo do template é
+  // empurrado pelo bot. Registrá-lo dispararia divergência e autor não
+  // reconhecido falsos em todo repositório — então é ignorado na ingestão.
+  it('ignora push de bot (sender.type Bot) sem gravar nada', async () => {
+    const payloadObj = {
+      repository: { id: 98765 },
+      sender: { id: 2222, login: 'crivo-faminas[bot]', type: 'Bot' },
+      ref: 'refs/heads/main',
+      forced: false,
+      commits: [
+        {
+          id: 'scaffoldsha',
+          message: 'Initial commit',
+          timestamp: '2026-07-19T14:50:00Z',
+          author: { name: 'crivo-faminas[bot]', email: 'bot@users.noreply.github.com' },
+        },
+      ],
+    };
+    const payload = JSON.stringify(payloadObj);
+
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue({
+      id: 1,
+      nome_completo: 'faminas-ads/test-repo',
+      github_repo_id: 98765n,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': getSignature(payload),
+        'x-github-event': 'push',
+        'x-github-delivery': 'bot-delivery-1',
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).message).toBe('Bot push ignored');
+    // Nada gravado, nada enfileirado.
+    expect(prisma.push.create).not.toHaveBeenCalled();
+    expect(prisma.commit.create).not.toHaveBeenCalled();
+    expect(enqueueDetectorJob).not.toHaveBeenCalled();
+  });
+
   it('should return 200 and skip database save if push is duplicate (idempotency)', async () => {
     const payloadObj = {
       repository: { id: 98765 },

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
+import { isBotLogin } from '../lib/identity.js';
 import { enqueueStatsJob, enqueueDetectorJob } from '../jobs/queues.js';
 
 /**
@@ -86,7 +87,21 @@ export async function webhookRoutes(fastify: FastifyInstance) {
         logger.debug({ githubRepoId }, 'Webhook ignored: repository not tracked in Crivo');
         return reply.send({ message: 'Repository not tracked' });
       }
-      
+
+      // Pushes de bot não são atividade de aluno. O caso concreto é o commit de
+      // scaffold que a GitHub App cria ao gerar o repo do template: registrá-lo
+      // dispararia DIVERGENCIA_PUSHER_AUTOR (bot ≠ dono) e AUTOR_NAO_RECONHECIDO
+      // falsos em TODO repositório. `sender.type === 'Bot'` é o sinal canônico do
+      // GitHub; o sufixo `[bot]` no login é o reforço. Ignoramos na origem para
+      // não poluir sinalizações nem métricas.
+      if (payload.sender?.type === 'Bot' || isBotLogin(payload.sender?.login)) {
+        logger.info(
+          { pusher: payload.sender?.login, repo: repo.nome_completo },
+          'Webhook ignorado: push de bot (não é atividade de aluno)'
+        );
+        return reply.send({ message: 'Bot push ignored' });
+      }
+
       // 2. Check Idempotency: Has this delivery been processed?
       const existingPush = await prisma.push.findUnique({
         where: { github_delivery_id: deliveryId },
