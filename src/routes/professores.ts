@@ -544,6 +544,42 @@ export async function professorRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.delete('/prof/repositorios/:id', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Exclui um repositório no GitHub e todos os seus dados no Crivo',
+      security: AUTH_SECURITY,
+      params: docSchema(repositorioIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id: repoId } = repositorioIdParamsSchema.parse(request.params);
+    const repositorio = await prisma.repositorio.findUnique({ where: { id: repoId } });
+
+    if (!repositorio) {
+      reply.status(404).send({ error: 'Repositório not found' });
+      return;
+    }
+
+    const [owner, repo] = repositorio.nome_completo.split('/');
+    if (!owner || !repo) {
+      reply.status(500).send({ error: 'Nome completo do repositório inválido' });
+      return;
+    }
+
+    const octokit = await getInstallationOctokit();
+    try {
+      await withGithubRetry(() => octokit.rest.repos.delete({ owner, repo }));
+    } catch (error: any) {
+      // Permite concluir uma exclusão interrompida entre o GitHub e o banco.
+      if (error?.status !== 404) throw error;
+    }
+
+    // As relações do Repositorio usam onDelete: Cascade para pushes, commits,
+    // entregas e sinalizações. Matrícula, aluno/equipe e trabalho permanecem.
+    await prisma.repositorio.delete({ where: { id: repoId } });
+    return reply.status(204).send();
+  });
+
   // ==========================================
   // 6b. POST /prof/repositorios/:id/reprocessar-setup
   // ==========================================
