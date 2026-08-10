@@ -87,6 +87,47 @@ const congelarQuerySchema = z.object({
 
 const AUTH_SECURITY: Record<string, string[]>[] = [{ cookieAuth: [] }, { bearerAuth: [] }];
 
+/**
+ * Checa o template no GitHub antes de gravar o trabalho. Devolve a mensagem de
+ * erro (em português, porque vai direto para a tela do professor) ou `null`.
+ *
+ * `POST /repos/:owner/:repo/generate` responde **404 para quatro causas
+ * distintas** — repositório invisível para a instalação, repositório que não é
+ * template, App sem permissão e App não instalado — e esse 404 só apareceria
+ * mais tarde, para o primeiro aluno que tentasse criar o repositório dele. Como
+ * `repos.get` já era chamado aqui e a resposta traz `is_template` e `archived`,
+ * as duas causas verificáveis viram erro na hora, com o conserto no texto.
+ */
+async function checarTemplateNoGithub(templateRepo: string): Promise<string | null> {
+  const [owner, repo] = templateRepo.split('/');
+  const octokit = await getInstallationOctokit();
+
+  let data;
+  try {
+    ({ data } = await withGithubRetry(() => octokit.rest.repos.get({ owner, repo })));
+  } catch (err: any) {
+    return (
+      `O app do Crivo não encontrou '${templateRepo}' no GitHub (${err.message}). ` +
+      `Verifique o nome, e se o repositório está na organização onde o app foi instalado ` +
+      `e liberado em Repository access.`
+    );
+  }
+
+  if (!data.is_template) {
+    return (
+      `O repositório '${templateRepo}' existe, mas não está marcado como template. ` +
+      `Marque a caixinha "Template repository" em https://github.com/${templateRepo}/settings ` +
+      `e salve de novo — sem isso o GitHub recusa a criação do repositório de cada aluno.`
+    );
+  }
+
+  if (data.archived) {
+    return `O repositório '${templateRepo}' está arquivado e não pode gerar novos repositórios.`;
+  }
+
+  return null;
+}
+
 export async function professorRoutes(fastify: FastifyInstance) {
 
   // Apply requireProfessor middleware to all professor routes
@@ -359,20 +400,13 @@ export async function professorRoutes(fastify: FastifyInstance) {
     const schema = criarTrabalhoBodySchema;
 
     const parsed = schema.parse(request.body);
-    
-    // Validate template repo exists on GitHub
-    const [owner, repo] = parsed.template_repo.split('/');
-    const octokit = await getInstallationOctokit();
-    
-    try {
-      await withGithubRetry(() =>
-        octokit.rest.repos.get({ owner, repo })
-      );
-    } catch (err: any) {
-      reply.status(400).send({ error: `Template repository '${parsed.template_repo}' not found on GitHub or unauthorized: ${err.message}` });
+
+    const problemaNoTemplate = await checarTemplateNoGithub(parsed.template_repo);
+    if (problemaNoTemplate) {
+      reply.status(400).send({ error: problemaNoTemplate });
       return;
     }
-    
+
     try {
       const created = await prisma.trabalho.create({ data: parsed });
       return reply.status(201).send(created);
@@ -423,15 +457,11 @@ export async function professorRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // Mesma validação da criação: template inexistente ou fora do alcance do app
-    // só apareceria muito depois, no primeiro aluno que tentasse criar o repositório.
+    // Mesma validação da criação, só quando o template muda.
     if (parsed.template_repo && parsed.template_repo !== trabalho.template_repo) {
-      const [owner, repo] = parsed.template_repo.split('/');
-      const octokit = await getInstallationOctokit();
-      try {
-        await withGithubRetry(() => octokit.rest.repos.get({ owner, repo }));
-      } catch (err: any) {
-        reply.status(400).send({ error: `Template repository '${parsed.template_repo}' not found on GitHub or unauthorized: ${err.message}` });
+      const problemaNoTemplate = await checarTemplateNoGithub(parsed.template_repo);
+      if (problemaNoTemplate) {
+        reply.status(400).send({ error: problemaNoTemplate });
         return;
       }
     }

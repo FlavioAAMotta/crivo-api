@@ -19,6 +19,7 @@ vi.mock('../src/lib/prisma.js', () => ({
     trabalho: {
       findUnique: vi.fn(),
       update: vi.fn(),
+      create: vi.fn(),
     },
     repositorio: {
       count: vi.fn(),
@@ -57,7 +58,7 @@ describe('PATCH /prof/trabalhos/:id', () => {
       ...data,
     })) as any);
     vi.mocked(getInstallationOctokit).mockResolvedValue({
-      rest: { repos: { get: vi.fn().mockResolvedValue({ data: {} }) } },
+      rest: { repos: { get: vi.fn().mockResolvedValue({ data: { is_template: true } }) } },
     } as any);
   });
 
@@ -97,6 +98,43 @@ describe('PATCH /prof/trabalhos/:id', () => {
       url: '/prof/trabalhos/7',
       headers: auth(PROFESSOR),
       payload: { template_repo: 'faminas-ads/nao-existe' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(prisma.trabalho.update).not.toHaveBeenCalled();
+  });
+
+  it('rejeita repositório que existe mas não é template, dizendo onde marcar', async () => {
+    vi.mocked(getInstallationOctokit).mockResolvedValue({
+      rest: { repos: { get: vi.fn().mockResolvedValue({ data: { is_template: false } }) } },
+    } as any);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/prof/trabalhos/7',
+      headers: auth(PROFESSOR),
+      payload: { template_repo: 'faminas-ads/repo-comum' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    // O professor precisa saber o que fazer, não só que falhou.
+    expect(JSON.parse(response.body).error).toContain('Template repository');
+    expect(JSON.parse(response.body).error).toContain('/settings');
+    expect(prisma.trabalho.update).not.toHaveBeenCalled();
+  });
+
+  it('rejeita template arquivado', async () => {
+    vi.mocked(getInstallationOctokit).mockResolvedValue({
+      rest: {
+        repos: { get: vi.fn().mockResolvedValue({ data: { is_template: true, archived: true } }) },
+      },
+    } as any);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/prof/trabalhos/7',
+      headers: auth(PROFESSOR),
+      payload: { template_repo: 'faminas-ads/template-velho' },
     });
 
     expect(response.statusCode).toBe(400);
@@ -182,5 +220,59 @@ describe('PATCH /prof/trabalhos/:id', () => {
     });
 
     expect(response.statusCode).toBe(409);
+  });
+});
+
+describe('POST /prof/trabalhos — checagem do template', () => {
+  const app = buildApp();
+
+  const corpo = {
+    turma_id: 3,
+    titulo: 'Trabalho 3',
+    descricao_md: '',
+    slug: 'trabalho-3',
+    tipo: 'EQUIPE',
+    template_repo: 'faminas-ads/template',
+    janela_inicio: '2026-03-01T12:00:00.000Z',
+    deadline: '2026-04-01T12:00:00.000Z',
+    congelamento_automatico: true,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.trabalho.create).mockResolvedValue({ id: 9, ...corpo } as any);
+  });
+
+  it('cria quando o repositório é template', async () => {
+    vi.mocked(getInstallationOctokit).mockResolvedValue({
+      rest: { repos: { get: vi.fn().mockResolvedValue({ data: { is_template: true } }) } },
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/trabalhos',
+      headers: auth(PROFESSOR),
+      payload: corpo,
+    });
+
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('recusa antes de gravar quando falta a marcação de template', async () => {
+    vi.mocked(getInstallationOctokit).mockResolvedValue({
+      rest: { repos: { get: vi.fn().mockResolvedValue({ data: { is_template: false } }) } },
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/prof/trabalhos',
+      headers: auth(PROFESSOR),
+      payload: corpo,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).error).toContain('Template repository');
+    // O trabalho não nasce quebrado: o erro apareceria só no primeiro aluno.
+    expect(prisma.trabalho.create).not.toHaveBeenCalled();
   });
 });
