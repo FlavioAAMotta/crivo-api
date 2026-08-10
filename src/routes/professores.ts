@@ -46,6 +46,21 @@ const criarTrabalhoBodySchema = z.object({
   congelamento_automatico: z.boolean().default(true),
 });
 
+// Edição de trabalho já criado. `turma_id` fica de fora de propósito: mover um
+// trabalho de turma deixaria repositórios, equipes e matrículas apontando para
+// a turma antiga. `tipo` só é aceito enquanto o trabalho não tem repositório
+// (ver a checagem no handler).
+const atualizarTrabalhoBodySchema = z.object({
+  titulo: z.string().min(3).optional(),
+  descricao_md: z.string().optional(),
+  slug: z.string().min(2).optional(),
+  tipo: z.enum(['INDIVIDUAL', 'EQUIPE']).optional(),
+  template_repo: z.string().includes('/').optional(),
+  janela_inicio: z.string().transform(d => new Date(d)).optional(),
+  deadline: z.string().transform(d => new Date(d)).optional(),
+  congelamento_automatico: z.boolean().optional(),
+});
+
 const gradeQuerySchema = z.object({ trabalho_id: z.string().transform(Number) });
 
 const repositorioIdParamsSchema = z.object({ id: z.string().transform(Number) });
@@ -361,6 +376,72 @@ export async function professorRoutes(fastify: FastifyInstance) {
     try {
       const created = await prisma.trabalho.create({ data: parsed });
       return reply.status(201).send(created);
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        reply.status(409).send({ error: 'Trabalho slug must be unique' });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  fastify.patch('/prof/trabalhos/:id', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Edita um trabalho já criado (campos parciais)',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+      body: docSchema(atualizarTrabalhoBodySchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId } = trabalhoIdParamsSchema.parse(request.params);
+    const parsed = atualizarTrabalhoBodySchema.parse(request.body);
+
+    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId } });
+    if (!trabalho) {
+      reply.status(404).send({ error: 'Trabalho not found' });
+      return;
+    }
+
+    // A janela é um par: um PATCH que mexe só numa ponta ainda pode inverter a ordem.
+    const janelaInicio = parsed.janela_inicio ?? trabalho.janela_inicio;
+    const deadline = parsed.deadline ?? trabalho.deadline;
+    if (deadline <= janelaInicio) {
+      reply.status(400).send({ error: 'deadline must be after janela_inicio' });
+      return;
+    }
+
+    // Trocar o tipo com repositórios criados deixaria repos ALUNO num trabalho de
+    // EQUIPE (e vice-versa) — o aluno perderia o acesso ao que já entregou.
+    if (parsed.tipo && parsed.tipo !== trabalho.tipo) {
+      const reposExistentes = await prisma.repositorio.count({ where: { trabalho_id: trabalhoId } });
+      if (reposExistentes > 0) {
+        reply.status(400).send({
+          error: `Cannot change tipo: ${reposExistentes} repository(ies) already created for this trabalho`,
+        });
+        return;
+      }
+    }
+
+    // Mesma validação da criação: template inexistente ou fora do alcance do app
+    // só apareceria muito depois, no primeiro aluno que tentasse criar o repositório.
+    if (parsed.template_repo && parsed.template_repo !== trabalho.template_repo) {
+      const [owner, repo] = parsed.template_repo.split('/');
+      const octokit = await getInstallationOctokit();
+      try {
+        await withGithubRetry(() => octokit.rest.repos.get({ owner, repo }));
+      } catch (err: any) {
+        reply.status(400).send({ error: `Template repository '${parsed.template_repo}' not found on GitHub or unauthorized: ${err.message}` });
+        return;
+      }
+    }
+
+    try {
+      const updated = await prisma.trabalho.update({
+        where: { id: trabalhoId },
+        data: parsed,
+      });
+      return reply.send(updated);
     } catch (err: any) {
       if (err.code === 'P2002') {
         reply.status(409).send({ error: 'Trabalho slug must be unique' });
