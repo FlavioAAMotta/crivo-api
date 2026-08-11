@@ -7,6 +7,7 @@ import { signToken, requireAuth, signPreAuthToken, verifyPreAuthToken, requirePr
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
+import { vincularCommitsOrfaos } from '../services/emails.js';
 
 const iniciarOauthQuerySchema = z.object({ state: z.string().optional() });
 
@@ -69,15 +70,29 @@ async function prepopularEmailsDeCommit(usuarioId: number, accessToken: string):
     }
 
     const emailsList = await emailsResponse.json() as Array<{ email?: string; verified?: boolean }>;
+    const gravados: string[] = [];
     for (const emailObj of emailsList) {
       if (!emailObj.email) continue;
       const email = emailObj.email.toLowerCase();
-      await prisma.emailCommit.upsert({
-        where: { email },
-        update: { verificado: emailObj.verified ?? false },
-        create: { usuario_id: usuarioId, email, verificado: emailObj.verified ?? false },
-      }).catch(() => {}); // e-mail já pertence a outro usuário (unique global): não reatribui
+      try {
+        const registro = await prisma.emailCommit.upsert({
+          where: { email },
+          update: { verificado: emailObj.verified ?? false },
+          create: { usuario_id: usuarioId, email, verificado: emailObj.verified ?? false },
+        });
+        // O upsert casa por `email` (unique global): se o endereço já pertencia a
+        // outro usuário, ele atualiza a linha alheia sem reatribuí-la — e esse
+        // e-mail não pode entrar no vínculo retroativo deste aluno.
+        if (registro?.usuario_id === usuarioId) gravados.push(email);
+      } catch {
+        // e-mail já pertence a outro usuário (unique global): não reatribui
+      }
     }
+
+    // Um aluno que vincula o GitHub depois de já ter empurrado commits (ou que
+    // relogou depois de tornar um e-mail público) precisa que os commits já
+    // gravados sejam atribuídos agora — o webhook não volta atrás sozinho.
+    await vincularCommitsOrfaos(usuarioId, gravados);
   } catch (err) {
     logger.warn({ usuarioId, err }, 'Falha ao prepopular e-mails de commit do GitHub');
   }
@@ -466,7 +481,13 @@ export async function authRoutes(fastify: FastifyInstance) {
           verificado: false, // In real apps, needs email verification. Defaulting false
         },
       });
-      return reply.status(201).send(newEmail);
+
+      // Cadastrar o e-mail vale para o passado também: sem isto, o aluno que
+      // descobre no onboarding que faltava um endereço continuaria com todos os
+      // commits anteriores marcados como autor não reconhecido.
+      const vinculados = await vincularCommitsOrfaos(request.user!.id, [newEmail.email]);
+
+      return reply.status(201).send({ ...newEmail, commits_vinculados: vinculados });
     } catch (error: any) {
       if (error.code === 'P2002') {
         reply.status(409).send({ error: 'Email already registered' });
