@@ -15,6 +15,11 @@ export function serializeBigInt<T>(obj: T): any {
   if (typeof obj === 'bigint') {
     return obj.toString();
   }
+  // Date é `typeof 'object'` com zero chaves próprias: cair no ramo genérico
+  // abaixo a reescreveria como `{}` e apagaria toda data da resposta.
+  if (obj instanceof Date) {
+    return obj.toISOString();
+  }
   if (Array.isArray(obj)) {
     return obj.map(serializeBigInt);
   }
