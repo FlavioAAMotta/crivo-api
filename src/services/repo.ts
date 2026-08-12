@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
 import { config } from '../lib/config.js';
+import { exigirTrabalhoLiberado } from '../lib/janela.js';
 import { logger } from '../lib/logger.js';
 import { enqueueRepoSetupJob } from '../jobs/queues.js';
 
@@ -232,7 +233,11 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
   if (!trabalho) {
     throw new Error('Trabalho not found');
   }
-  
+
+  // O trabalho ainda fechado não gera repositório: o repositório é o template
+  // do enunciado, criá-lo antes entregaria justamente o que a janela esconde.
+  exigirTrabalhoLiberado(trabalho.janela_inicio);
+
   // Validate student is matriculated in the class
   const isMatriculated = trabalho.turma.matriculas.some(m => m.usuario_id === usuarioId);
   if (!isMatriculated) {
@@ -337,7 +342,11 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   if (!trabalho) {
     throw new Error('Trabalho not found');
   }
-  
+
+  // Mesma trava do individual: a equipe pode ser montada antes da abertura, o
+  // repositório dela não.
+  exigirTrabalhoLiberado(trabalho.janela_inicio);
+
   // Validate that a repository doesn't already exist
   const existingRepo = await prisma.repositorio.findFirst({
     where: {
