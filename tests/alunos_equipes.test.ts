@@ -36,13 +36,22 @@ function trabalhoComEquipes() {
       {
         id: 1,
         nome: 'Equipe Barramento',
-        membros: [{ usuario_id: ALUNO_MATRICULADO.id }, { usuario_id: 11 }],
+        formada_em: new Date(),
+        lider: { id: ALUNO_MATRICULADO.id, nome: 'Aluno Turma' },
+        solicitacoes: [],
+        membros: [
+          { usuario_id: ALUNO_MATRICULADO.id, usuario: { id: ALUNO_MATRICULADO.id, nome: 'Aluno Turma' } },
+          { usuario_id: 11, usuario: { id: 11, nome: 'Colega' } },
+        ],
         repositorios: [{ id: 500 }],
       },
       {
         id: 2,
         nome: 'Grupo 02',
-        membros: [{ usuario_id: 12 }],
+        formada_em: null,
+        lider: { id: 12, nome: 'Aluno 12' },
+        solicitacoes: [],
+        membros: [{ usuario_id: 12, usuario: { id: 12, nome: 'Aluno 12' } }],
         repositorios: [],
       },
     ],
@@ -61,7 +70,7 @@ describe('GET /trabalhos/:id/equipes', () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it('lista as equipes com tamanho e status, sem expor os membros', async () => {
+  it('lista as equipes com líder e integrantes', async () => {
     vi.mocked(prisma.trabalho.findUnique).mockResolvedValue(trabalhoComEquipes() as any);
 
     const response = await app.inject({
@@ -81,7 +90,8 @@ describe('GET /trabalhos/:id/equipes', () => {
     expect(barramento.tem_repositorio).toBe(true);
     expect(barramento.sou_membro).toBe(true);
     // Privacidade: a composição não vaza.
-    expect(barramento.membros).toBeUndefined();
+    expect(barramento.lider).toEqual({ id: 10, nome: 'Aluno Turma' });
+    expect(barramento.membros).toHaveLength(2);
 
     const grupo02 = body.find((e: any) => e.id === 2);
     // Sem repositório => ainda formando, e não é a equipe do requisitante.

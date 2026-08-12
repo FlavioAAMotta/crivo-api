@@ -40,6 +40,7 @@ export async function createTeam(trabalhoId: number, nome: string, creatorId: nu
       data: {
         trabalho_id: trabalhoId,
         nome,
+        lider_id: creatorId,
       },
     });
 
@@ -69,10 +70,8 @@ class TeamError extends Error {
 /**
  * Lista as equipes de um trabalho em grupo — o "quadro da turma" do aluno.
  *
- * Privacidade: NÃO expõe quem está em cada equipe, só o tamanho e o status. Um
- * aluno pode ver quais grupos existem e quais ainda estão formando sem que a
- * composição de cada grupo vire informação pública. A própria equipe do aluno
- * é sinalizada por `sou_membro`, para a UI destacá-la.
+ * Expõe líder e integrantes para facilitar a formação dos grupos dentro da
+ * própria turma. A própria equipe do aluno é sinalizada por `sou_membro`.
  *
  * Status: `completo` quando a equipe já criou seu repositório (comprometeu-se
  * com o trabalho); `formando` enquanto ainda não criou. É o único sinal
@@ -92,7 +91,9 @@ export async function listTeamsForTrabalho(trabalhoId: number, requesterId: numb
       },
       equipes: {
         include: {
-          membros: { select: { usuario_id: true } },
+          membros: { include: { usuario: { select: { id: true, nome: true, matricula: true, github_login: true } } } },
+          lider: { select: { id: true, nome: true } },
+          solicitacoes: { where: { usuario_id: requesterId }, select: { id: true } },
           repositorios: { select: { id: true } },
         },
       },
@@ -122,6 +123,10 @@ export async function listTeamsForTrabalho(trabalhoId: number, requesterId: numb
       max_integrantes: trabalho.max_integrantes_equipe,
       status: temRepositorio ? 'completo' : formada ? 'formada' : 'formando',
       sou_membro: equipe.membros.some(m => m.usuario_id === requesterId),
+      lider: equipe.lider,
+      membros: equipe.membros.map(m => m.usuario),
+      solicitacao_pendente: equipe.solicitacoes.length > 0,
+      pode_solicitar: !formada && equipe.membros.length < trabalho.max_integrantes_equipe,
     };
   });
 }
@@ -155,11 +160,11 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
     throw new TeamError(`A equipe atingiu o limite de ${equipe.trabalho.max_integrantes_equipe} integrantes`, 409);
   }
 
-  // Verify authorization: requester must be a professor or a member of the team
+  // Convites diretos ficam restritos ao líder (e ao professor). Alunos de fora
+  // entram pelo fluxo explícito de solicitação e aceite.
   if (requesterRole !== 'PROFESSOR') {
-    const isRequesterMember = equipe.membros.some(m => m.usuario_id === requesterId);
-    if (!isRequesterMember) {
-      throw new Error('Forbidden: You are not a member of this team');
+    if (equipe.lider_id !== requesterId) {
+      throw new TeamError('Apenas o líder pode adicionar integrantes', 403);
     }
   }
 
@@ -190,10 +195,13 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
 }
 
 export async function getMyTeam(trabalhoId: number, usuarioId: number) {
-  return prisma.equipe.findFirst({
+  const equipe = await prisma.equipe.findFirst({
     where: { trabalho_id: trabalhoId, membros: { some: { usuario_id: usuarioId } } },
-    include: { membros: { include: { usuario: true } }, repositorios: true, trabalho: true },
+    include: { membros: { include: { usuario: true } }, repositorios: true, trabalho: true, lider: true,
+      solicitacoes: { include: { usuario: true }, orderBy: { criada_em: 'asc' } } },
   });
+  if (equipe && equipe.lider_id !== usuarioId) equipe.solicitacoes = [];
+  return equipe;
 }
 
 export async function finalizeTeam(equipeId: number, requesterId: number) {
@@ -201,10 +209,46 @@ export async function finalizeTeam(equipeId: number, requesterId: number) {
     where: { id: equipeId }, include: { membros: true, repositorios: true, trabalho: true },
   });
   if (!equipe) throw new TeamError('Equipe não encontrada', 404);
-  if (!equipe.membros.some(m => m.usuario_id === requesterId)) throw new TeamError('Você não pertence a esta equipe', 403);
+  if (equipe.lider_id !== requesterId) throw new TeamError('Apenas o líder pode finalizar a equipe', 403);
   if (equipe.formada_em) return equipe;
   if (equipe.repositorios.length > 0) throw new TeamError('A equipe já possui repositório', 409);
   if (equipe.membros.length < 2) throw new TeamError('Adicione pelo menos 2 integrantes antes de finalizar a equipe', 409);
   if (equipe.membros.length > equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe excede o limite do trabalho', 409);
   return prisma.equipe.update({ where: { id: equipeId }, data: { formada_em: new Date() } });
+}
+
+export async function requestTeamEntry(equipeId: number, requesterId: number) {
+  const equipe = await prisma.equipe.findUnique({
+    where: { id: equipeId },
+    include: { membros: true, trabalho: { include: { turma: { include: { matriculas: true } } } } },
+  });
+  if (!equipe) throw new TeamError('Equipe não encontrada', 404);
+  if (equipe.formada_em) throw new TeamError('A equipe já foi finalizada', 409);
+  if (equipe.membros.length >= equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe está completa', 409);
+  if (!equipe.trabalho.turma.matriculas.some(m => m.usuario_id === requesterId)) throw new TeamError('Você não pertence a esta turma', 403);
+  if (equipe.membros.some(m => m.usuario_id === requesterId)) throw new TeamError('Você já pertence a esta equipe', 409);
+  const outraEquipe = await prisma.equipeMembro.findFirst({ where: { usuario_id: requesterId, equipe: { trabalho_id: equipe.trabalho_id } } });
+  if (outraEquipe) throw new TeamError('Você já pertence a outra equipe neste trabalho', 409);
+  const existente = await prisma.solicitacaoEquipe.findUnique({ where: { equipe_id_usuario_id: { equipe_id: equipeId, usuario_id: requesterId } } });
+  if (existente) return existente;
+  return prisma.solicitacaoEquipe.create({ data: { equipe_id: equipeId, usuario_id: requesterId } });
+}
+
+export async function decideTeamRequest(solicitacaoId: number, leaderId: number, aceitar: boolean) {
+  return prisma.$transaction(async tx => {
+    const pedido = await tx.solicitacaoEquipe.findUnique({
+      where: { id: solicitacaoId },
+      include: { equipe: { include: { membros: true, trabalho: true } } },
+    });
+    if (!pedido) throw new TeamError('Solicitação não encontrada', 404);
+    if (pedido.equipe.lider_id !== leaderId) throw new TeamError('Apenas o líder pode responder solicitações', 403);
+    if (!aceitar) return tx.solicitacaoEquipe.delete({ where: { id: solicitacaoId } });
+    if (pedido.equipe.formada_em) throw new TeamError('A equipe já foi finalizada', 409);
+    if (pedido.equipe.membros.length >= pedido.equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe atingiu o limite de integrantes', 409);
+    const outraEquipe = await tx.equipeMembro.findFirst({ where: { usuario_id: pedido.usuario_id, equipe: { trabalho_id: pedido.equipe.trabalho_id } } });
+    if (outraEquipe) throw new TeamError('O aluno já entrou em outra equipe', 409);
+    const membro = await tx.equipeMembro.create({ data: { equipe_id: pedido.equipe_id, usuario_id: pedido.usuario_id } });
+    await tx.solicitacaoEquipe.deleteMany({ where: { usuario_id: pedido.usuario_id, equipe: { trabalho_id: pedido.equipe.trabalho_id } } });
+    return membro;
+  });
 }

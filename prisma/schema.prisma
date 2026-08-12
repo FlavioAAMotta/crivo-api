@@ -69,6 +69,8 @@ model Usuario {
   emails            EmailCommit[]
   matriculas        Matricula[]
   equipe_membros    EquipeMembro[]
+  equipes_lideradas Equipe[]             @relation("LiderEquipe")
+  solicitacoes_equipe SolicitacaoEquipe[]
   repositorios      Repositorio[]
   revisoes          Sinalizacao[]  @relation("RevisorSinalizacao")
   commits           Commit[]
@@ -148,12 +150,27 @@ model Equipe {
   trabalho_id Int
   nome        String
   formada_em  DateTime?
+  lider_id    Int
 
   trabalho    Trabalho @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  lider       Usuario  @relation("LiderEquipe", fields: [lider_id], references: [id])
   membros     EquipeMembro[]
+  solicitacoes SolicitacaoEquipe[]
   repositorios Repositorio[]
 
   @@map("equipes")
+}
+
+model SolicitacaoEquipe {
+  id          Int      @id @default(autoincrement())
+  equipe_id   Int
+  usuario_id  Int
+  criada_em   DateTime @default(now())
+  equipe      Equipe   @relation(fields: [equipe_id], references: [id], onDelete: Cascade)
+  usuario     Usuario  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@unique([equipe_id, usuario_id])
+  @@map("solicitacoes_equipe")
 }
 
 model EquipeMembro {

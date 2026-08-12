@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../lib/auth.js';
 import { createRepositoryForStudent, createRepositoryForTeam } from '../services/repo.js';
-import { createTeam, addTeamMember, listTeamsForTrabalho, getMyTeam, finalizeTeam } from '../services/team.js';
+import { createTeam, addTeamMember, listTeamsForTrabalho, getMyTeam, finalizeTeam, requestTeamEntry, decideTeamRequest } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
 import { trabalhoLiberado } from '../lib/janela.js';
 import { serializeBigInt } from '../lib/serializer.js';
@@ -20,6 +20,9 @@ const criarEquipeBodySchema = z.object({
 const equipeIdParamsSchema = z.object({
   id: z.string().transform(Number),
 });
+
+const solicitacaoIdParamsSchema = z.object({ id: z.string().transform(Number) });
+const decidirSolicitacaoBodySchema = z.object({ aceitar: z.boolean() });
 
 const addMembroBodySchema = z.object({
   usuario_id: z.number(),
@@ -169,7 +172,7 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       tags: ['alunos'],
       summary: 'Lista as equipes de um trabalho em grupo (quadro da turma)',
       description:
-        'Devolve tamanho e status de cada equipe do trabalho, sem expor a composição de grupos alheios. Apenas para alunos matriculados na turma.',
+        'Devolve líder, integrantes, tamanho e status de cada equipe. Apenas para alunos matriculados na turma.',
       security: AUTH_SECURITY,
       params: docSchema(trabalhoIdParamsSchema),
     },
@@ -268,6 +271,30 @@ export async function alunoRoutes(fastify: FastifyInstance) {
     const { id } = equipeIdParamsSchema.parse(request.params);
     try {
       return reply.send(serializeBigInt(await finalizeTeam(id, request.user!.id)));
+    } catch (err: any) {
+      return reply.status(err.statusCode || 400).send({ error: err.message });
+    }
+  });
+
+  fastify.post('/equipes/:id/solicitacoes', {
+    schema: { tags: ['alunos'], summary: 'Solicita entrada em uma equipe aberta', security: AUTH_SECURITY, params: docSchema(equipeIdParamsSchema) },
+  }, async (request, reply) => {
+    const { id } = equipeIdParamsSchema.parse(request.params);
+    try {
+      return reply.status(201).send(await requestTeamEntry(id, request.user!.id));
+    } catch (err: any) {
+      return reply.status(err.statusCode || 400).send({ error: err.message });
+    }
+  });
+
+  fastify.post('/solicitacoes-equipe/:id/decidir', {
+    schema: { tags: ['alunos'], summary: 'Líder aceita ou recusa entrada na equipe', security: AUTH_SECURITY,
+      params: docSchema(solicitacaoIdParamsSchema), body: docSchema(decidirSolicitacaoBodySchema) },
+  }, async (request, reply) => {
+    const { id } = solicitacaoIdParamsSchema.parse(request.params);
+    const { aceitar } = decidirSolicitacaoBodySchema.parse(request.body);
+    try {
+      return reply.send(await decideTeamRequest(id, request.user!.id, aceitar));
     } catch (err: any) {
       return reply.status(err.statusCode || 400).send({ error: err.message });
     }

@@ -86,6 +86,7 @@ describe('um aluno, uma equipe por trabalho', () => {
     vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
       id: 9,
       trabalho_id: 7,
+      lider_id: ALUNO.id,
       membros: [{ usuario_id: ALUNO.id }],
       trabalho: { turma: { matriculas: [{ usuario_id: ALUNO.id }, { usuario_id: 5 }] } },
     } as any);
@@ -107,6 +108,7 @@ describe('um aluno, uma equipe por trabalho', () => {
     vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
       id: 9,
       trabalho_id: 7,
+      lider_id: ALUNO.id,
       membros: [{ usuario_id: ALUNO.id }],
       trabalho: { turma: { matriculas: [{ usuario_id: ALUNO.id }, { usuario_id: 5 }] } },
     } as any);
