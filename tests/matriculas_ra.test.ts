@@ -11,7 +11,7 @@ vi.mock('bullmq', () => ({
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
-    usuario: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    usuario: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     matricula: { upsert: vi.fn(), findMany: vi.fn() },
     trabalho: { findFirst: vi.fn() },
     equipe: { findMany: vi.fn() },
@@ -26,6 +26,34 @@ vi.mock('../src/lib/octokit.js', () => ({
 
 const PROFESSOR = { id: 1, github_id: '1', github_login: 'prof1', papel: 'PROFESSOR' as const };
 const authProf = { authorization: `Bearer ${signToken(PROFESSOR)}` };
+
+describe('gestão individual do aluno', () => {
+  const app = buildApp();
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lista todas as disciplinas e turmas do aluno', async () => {
+    vi.mocked(prisma.usuario.findFirst).mockResolvedValue({
+      id: 50, papel: 'ALUNO', nome: 'Breno', aluno_teste: false,
+      matriculas: [{ usuario_id: 50, turma_id: 5, turma: {
+        id: 5, nome: 'Turma A', periodo: '2026.1', disciplina: { id: 2, nome: 'APIs' },
+      } }],
+    } as any);
+    const response = await app.inject({ method: 'GET', url: '/prof/alunos/50', headers: authProf });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).matriculas[0].turma.disciplina.nome).toBe('APIs');
+  });
+
+  it('marca um usuário aluno como teste', async () => {
+    vi.mocked(prisma.usuario.findFirst).mockResolvedValue({ id: 50, papel: 'ALUNO' } as any);
+    vi.mocked(prisma.usuario.update).mockResolvedValue({ id: 50, papel: 'ALUNO', aluno_teste: true } as any);
+    const response = await app.inject({
+      method: 'PATCH', url: '/prof/alunos/50/teste', headers: authProf,
+      payload: { aluno_teste: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(prisma.usuario.update).toHaveBeenCalledWith({ where: { id: 50 }, data: { aluno_teste: true } });
+  });
+});
 
 describe('POST /prof/turmas/:id/matriculas (RA)', () => {
   const app = buildApp();

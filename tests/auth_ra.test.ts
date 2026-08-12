@@ -139,6 +139,24 @@ describe('POST /auth/login-ra', () => {
     expect(body.etapa).toBe('vincular_github');
   });
 
+  it('aluno de teste com senha definida entra sem vincular GitHub', async () => {
+    const bcrypt = await import('bcryptjs');
+    const hash = await bcrypt.hash('nova-senha-123', 10);
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({
+      ...ALUNO_PENDENTE, senha_hash: hash, aluno_teste: true,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST', url: '/auth/login-ra',
+      payload: { ra: '25-99999', senha: 'nova-senha-123' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.etapa).toBe('logado');
+    expect(typeof body.token).toBe('string');
+  });
+
   it('senha já trocada: credenciais erradas são rejeitadas', async () => {
     const bcrypt = await import('bcryptjs');
     const hash = await bcrypt.hash('nova-senha-123', 10);
@@ -212,5 +230,19 @@ describe('POST /auth/redefinir-senha', () => {
     expect(prisma.usuario.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 40 } }),
     );
+  });
+
+  it('aluno de teste conclui a troca de senha já com uma sessão', async () => {
+    vi.mocked(prisma.usuario.update).mockResolvedValue({
+      ...ALUNO_PENDENTE, senha_hash: 'hash', aluno_teste: true,
+    } as any);
+    const token = signPreAuthToken({ usuario_id: 40, etapa: 'redefinir_senha' });
+    const response = await app.inject({
+      method: 'POST', url: '/auth/redefinir-senha',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { senha_nova: 'senha-nova-123' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).etapa).toBe('logado');
   });
 });
