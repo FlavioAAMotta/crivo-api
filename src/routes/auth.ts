@@ -382,6 +382,12 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     // Senha já trocada, mas ainda sem GitHub: segue para o vínculo.
+    if (usuario.aluno_teste) {
+      const token = signToken({ id: usuario.id, github_id: null, github_login: null, papel: usuario.papel });
+      reply.send({ token, etapa: 'logado' });
+      return;
+    }
+
     const token = signPreAuthToken({ usuario_id: usuario.id, etapa: 'vincular_github' });
     reply.send({ preauth_token: token, etapa: 'vincular_github' });
   });
@@ -406,10 +412,16 @@ export async function authRoutes(fastify: FastifyInstance) {
     const usuarioId = request.preAuth!.usuario_id;
 
     const senhaHash = await bcrypt.hash(senha_nova, 10);
-    await prisma.usuario.update({
+    const usuario = await prisma.usuario.update({
       where: { id: usuarioId },
       data: { senha_hash: senhaHash, senha_redefinida_em: new Date() },
     });
+
+    if (usuario.aluno_teste) {
+      const token = signToken({ id: usuario.id, github_id: null, github_login: null, papel: usuario.papel });
+      reply.send({ token, etapa: 'logado' });
+      return;
+    }
 
     const token = signPreAuthToken({ usuario_id: usuarioId, etapa: 'vincular_github' });
     reply.send({ preauth_token: token, etapa: 'vincular_github' });

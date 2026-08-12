@@ -24,6 +24,7 @@ const criarTurmaBodySchema = z.object({
 const turmaIdParamsSchema = z.object({ id: z.string().transform(Number) });
 
 const alunoIdParamsSchema = z.object({ id: z.string().transform(Number) });
+const alunoTesteBodySchema = z.object({ aluno_teste: z.boolean() });
 
 const importarMatriculasBodySchema = z.object({
   matriculas: z.array(
@@ -271,9 +272,39 @@ export async function professorRoutes(fastify: FastifyInstance) {
       github_login: m.usuario.github_login,
       senha_definida: m.usuario.senha_hash !== null,
       vinculado: m.usuario.github_login !== null,
+      aluno_teste: m.usuario.aluno_teste,
     }));
 
     return reply.send(linhas);
+  });
+
+  fastify.get('/prof/alunos/:id', {
+    schema: {
+      tags: ['professores'], summary: 'Detalha um aluno e todas as suas matrículas',
+      security: AUTH_SECURITY, params: docSchema(alunoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id } = alunoIdParamsSchema.parse(request.params);
+    const aluno = await prisma.usuario.findFirst({
+      where: { id, papel: 'ALUNO' },
+      include: { matriculas: { include: { turma: { include: { disciplina: true } } } } },
+    });
+    if (!aluno) return reply.status(404).send({ error: 'Aluno not found' });
+    return reply.send(serializeBigInt(aluno));
+  });
+
+  fastify.patch('/prof/alunos/:id/teste', {
+    schema: {
+      tags: ['professores'], summary: 'Marca ou desmarca um aluno como conta de teste sem GitHub obrigatório',
+      security: AUTH_SECURITY, params: docSchema(alunoIdParamsSchema), body: docSchema(alunoTesteBodySchema),
+    },
+  }, async (request, reply) => {
+    const { id } = alunoIdParamsSchema.parse(request.params);
+    const { aluno_teste } = alunoTesteBodySchema.parse(request.body);
+    const aluno = await prisma.usuario.findFirst({ where: { id, papel: 'ALUNO' } });
+    if (!aluno) return reply.status(404).send({ error: 'Aluno not found' });
+    const atualizado = await prisma.usuario.update({ where: { id }, data: { aluno_teste } });
+    return reply.send(serializeBigInt(atualizado));
   });
 
   fastify.post('/prof/alunos/:id/resetar-senha', {

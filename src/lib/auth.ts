@@ -16,8 +16,8 @@ export const TOKEN_TYPE_PREAUTH = 'preauth' as const;
 
 export interface UserPayload {
   id: number;
-  github_id: string; // Serialized BigInt as string
-  github_login: string;
+  github_id: string | null; // Serialized BigInt as string
+  github_login: string | null;
   papel: 'ALUNO' | 'PROFESSOR';
   typ: typeof TOKEN_TYPE_SESSAO;
 }
@@ -32,10 +32,10 @@ declare module 'fastify' {
  * Signs a user payload into a JWT token.
  * Ensures the github_id BigInt is serialized to string.
  */
-export function signToken(payload: { id: number; github_id: bigint | string; github_login: string; papel: 'ALUNO' | 'PROFESSOR' }): string {
+export function signToken(payload: { id: number; github_id: bigint | string | null; github_login: string | null; papel: 'ALUNO' | 'PROFESSOR' }): string {
   const tokenPayload: UserPayload = {
     id: payload.id,
-    github_id: payload.github_id.toString(),
+    github_id: payload.github_id?.toString() ?? null,
     github_login: payload.github_login,
     papel: payload.papel,
     // Carimbado aqui, num lugar só: quem chama signToken não precisa saber.

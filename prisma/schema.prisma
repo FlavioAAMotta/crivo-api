@@ -63,6 +63,7 @@ model Usuario {
   matricula           String?   @unique
   senha_hash          String?
   senha_redefinida_em DateTime?
+  aluno_teste         Boolean   @default(false)
   criado_em           DateTime  @default(now())
 
   emails            EmailCommit[]
