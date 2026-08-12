@@ -29,16 +29,10 @@ export async function createTeam(trabalhoId: number, nome: string, creatorId: nu
     throw new Error('Creator is not matriculated in this class');
   }
 
-  // Uma equipe por aluno POR TRABALHO. Equipes são deste trabalho (`trabalho_id`)
-  // e em outro trabalho outros grupos podem ser montados — mas dentro do mesmo
-  // trabalho um aluno em dois grupos deixaria dois repositórios reivindicando a
-  // mesma entrega, e a contribuição dele dividida entre eles.
   const equipeExistente = await prisma.equipeMembro.findFirst({
     where: { usuario_id: creatorId, equipe: { trabalho_id: trabalhoId } },
   });
-  if (equipeExistente) {
-    throw new Error('Student already belongs to a team in this trabalho');
-  }
+  if (equipeExistente) throw new TeamError('Student already belongs to a team in this trabalho', 409);
 
   // Create team and add creator as member in a transaction
   return prisma.$transaction(async (tx) => {
@@ -118,12 +112,15 @@ export async function listTeamsForTrabalho(trabalhoId: number, requesterId: numb
   // mais amigável para a UI do que um erro.
   return trabalho.equipes.map(equipe => {
     const temRepositorio = equipe.repositorios.length > 0;
+    const formada = Boolean(equipe.formada_em);
     return {
       id: equipe.id,
       nome: equipe.nome,
       total_integrantes: equipe.membros.length,
       tem_repositorio: temRepositorio,
-      status: temRepositorio ? 'completo' : 'formando',
+      formada,
+      max_integrantes: trabalho.max_integrantes_equipe,
+      status: temRepositorio ? 'completo' : formada ? 'formada' : 'formando',
       sou_membro: equipe.membros.some(m => m.usuario_id === requesterId),
     };
   });
@@ -153,6 +150,11 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
     throw new Error('Team not found');
   }
 
+  if (equipe.formada_em) throw new TeamError('A equipe já foi finalizada e não aceita novos integrantes', 409);
+  if (equipe.membros.length >= equipe.trabalho.max_integrantes_equipe) {
+    throw new TeamError(`A equipe atingiu o limite de ${equipe.trabalho.max_integrantes_equipe} integrantes`, 409);
+  }
+
   // Verify authorization: requester must be a professor or a member of the team
   if (requesterRole !== 'PROFESSOR') {
     const isRequesterMember = equipe.membros.some(m => m.usuario_id === requesterId);
@@ -173,17 +175,10 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
     throw new Error('User is already a member of this team');
   }
 
-  // Nem em outro grupo do mesmo trabalho (ver a mesma regra em createTeam).
   const outraEquipe = await prisma.equipeMembro.findFirst({
-    where: {
-      usuario_id: usuarioId,
-      equipe_id: { not: equipeId },
-      equipe: { trabalho_id: equipe.trabalho_id },
-    },
+    where: { usuario_id: usuarioId, equipe: { trabalho_id: equipe.trabalho_id } },
   });
-  if (outraEquipe) {
-    throw new Error('Student already belongs to another team in this trabalho');
-  }
+  if (outraEquipe) throw new TeamError('Student already belongs to another team in this trabalho', 409);
 
   // Add the member
   return prisma.equipeMembro.create({
@@ -192,4 +187,24 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
       usuario_id: usuarioId,
     },
   });
+}
+
+export async function getMyTeam(trabalhoId: number, usuarioId: number) {
+  return prisma.equipe.findFirst({
+    where: { trabalho_id: trabalhoId, membros: { some: { usuario_id: usuarioId } } },
+    include: { membros: { include: { usuario: true } }, repositorios: true, trabalho: true },
+  });
+}
+
+export async function finalizeTeam(equipeId: number, requesterId: number) {
+  const equipe = await prisma.equipe.findUnique({
+    where: { id: equipeId }, include: { membros: true, repositorios: true, trabalho: true },
+  });
+  if (!equipe) throw new TeamError('Equipe não encontrada', 404);
+  if (!equipe.membros.some(m => m.usuario_id === requesterId)) throw new TeamError('Você não pertence a esta equipe', 403);
+  if (equipe.formada_em) return equipe;
+  if (equipe.repositorios.length > 0) throw new TeamError('A equipe já possui repositório', 409);
+  if (equipe.membros.length < 2) throw new TeamError('Adicione pelo menos 2 integrantes antes de finalizar a equipe', 409);
+  if (equipe.membros.length > equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe excede o limite do trabalho', 409);
+  return prisma.equipe.update({ where: { id: equipeId }, data: { formada_em: new Date() } });
 }

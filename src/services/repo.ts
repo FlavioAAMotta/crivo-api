@@ -362,6 +362,9 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   if (equipe.membros.length === 0) {
     throw new Error('Team has no members');
   }
+  if (!equipe.formada_em) {
+    throw new Error('Finalize a formação da equipe antes de criar o repositório');
+  }
   
   // Naming format: {codigo-disciplina}-{trabalho-slug}-{equipe-nome} normalized
   const baseName = `${trabalho.turma.disciplina.codigo}-${trabalho.slug}-${equipe.nome}`;

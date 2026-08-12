@@ -132,6 +132,7 @@ model Trabalho {
   janela_inicio         DateTime
   deadline              DateTime
   congelamento_automatico Boolean     @default(true)
+  max_integrantes_equipe  Int         @default(4)
   criado_em             DateTime     @default(now())
 
   turma                 Turma        @relation(fields: [turma_id], references: [id], onDelete: Cascade)
@@ -146,6 +147,7 @@ model Equipe {
   id          Int      @id @default(autoincrement())
   trabalho_id Int
   nome        String
+  formada_em  DateTime?
 
   trabalho    Trabalho @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
   membros     EquipeMembro[]

@@ -45,6 +45,7 @@ const criarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)),
   deadline: z.string().transform(d => new Date(d)),
   congelamento_automatico: z.boolean().default(true),
+  max_integrantes_equipe: z.number().int().min(2).max(20).default(4),
 });
 
 // Edição de trabalho já criado. `turma_id` fica de fora de propósito: mover um
@@ -60,6 +61,7 @@ const atualizarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)).optional(),
   deadline: z.string().transform(d => new Date(d)).optional(),
   congelamento_automatico: z.boolean().optional(),
+  max_integrantes_equipe: z.number().int().min(2).max(20).optional(),
 });
 
 const gradeQuerySchema = z.object({ trabalho_id: z.string().transform(Number) });

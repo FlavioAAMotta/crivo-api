@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../lib/auth.js';
 import { createRepositoryForStudent, createRepositoryForTeam } from '../services/repo.js';
-import { createTeam, addTeamMember, listTeamsForTrabalho } from '../services/team.js';
+import { createTeam, addTeamMember, listTeamsForTrabalho, getMyTeam, finalizeTeam } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
 import { trabalhoLiberado } from '../lib/janela.js';
 import { serializeBigInt } from '../lib/serializer.js';
@@ -109,6 +109,7 @@ export async function alunoRoutes(fastify: FastifyInstance) {
           descricao_md: liberado ? t.descricao_md : null,
           slug: t.slug,
           tipo: t.tipo,
+          max_integrantes_equipe: t.max_integrantes_equipe,
           janela_inicio: t.janela_inicio,
           deadline: liberado ? t.deadline : null,
           liberado,
@@ -188,6 +189,13 @@ export async function alunoRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/trabalhos/:id/minha-equipe', {
+    schema: { tags: ['alunos'], summary: 'Retorna a equipe do aluno, inclusive antes do repositório', security: AUTH_SECURITY, params: docSchema(trabalhoIdParamsSchema) },
+  }, async (request, reply) => {
+    const { id } = trabalhoIdParamsSchema.parse(request.params);
+    return reply.send(serializeBigInt(await getMyTeam(id, request.user!.id)));
+  });
+
   // 3. POST /trabalhos/:id/equipes { nome } -> creates team for a work
   fastify.post('/trabalhos/:id/equipes', {
     schema: {
@@ -251,6 +259,17 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       return reply.status(201).send(membership);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  fastify.post('/equipes/:id/finalizar', {
+    schema: { tags: ['alunos'], summary: 'Finaliza a formação da equipe antes de criar o repositório', security: AUTH_SECURITY, params: docSchema(equipeIdParamsSchema) },
+  }, async (request, reply) => {
+    const { id } = equipeIdParamsSchema.parse(request.params);
+    try {
+      return reply.send(serializeBigInt(await finalizeTeam(id, request.user!.id)));
+    } catch (err: any) {
+      return reply.status(err.statusCode || 400).send({ error: err.message });
     }
   });
 
