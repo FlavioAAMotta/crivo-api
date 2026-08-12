@@ -29,6 +29,17 @@ export async function createTeam(trabalhoId: number, nome: string, creatorId: nu
     throw new Error('Creator is not matriculated in this class');
   }
 
+  // Uma equipe por aluno POR TRABALHO. Equipes são deste trabalho (`trabalho_id`)
+  // e em outro trabalho outros grupos podem ser montados — mas dentro do mesmo
+  // trabalho um aluno em dois grupos deixaria dois repositórios reivindicando a
+  // mesma entrega, e a contribuição dele dividida entre eles.
+  const equipeExistente = await prisma.equipeMembro.findFirst({
+    where: { usuario_id: creatorId, equipe: { trabalho_id: trabalhoId } },
+  });
+  if (equipeExistente) {
+    throw new Error('Student already belongs to a team in this trabalho');
+  }
+
   // Create team and add creator as member in a transaction
   return prisma.$transaction(async (tx) => {
     const equipe = await tx.equipe.create({
@@ -160,6 +171,18 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
   const isAlreadyMember = equipe.membros.some(m => m.usuario_id === usuarioId);
   if (isAlreadyMember) {
     throw new Error('User is already a member of this team');
+  }
+
+  // Nem em outro grupo do mesmo trabalho (ver a mesma regra em createTeam).
+  const outraEquipe = await prisma.equipeMembro.findFirst({
+    where: {
+      usuario_id: usuarioId,
+      equipe_id: { not: equipeId },
+      equipe: { trabalho_id: equipe.trabalho_id },
+    },
+  });
+  if (outraEquipe) {
+    throw new Error('Student already belongs to another team in this trabalho');
   }
 
   // Add the member

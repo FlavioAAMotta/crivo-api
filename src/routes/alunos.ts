@@ -5,6 +5,7 @@ import { requireAuth } from '../lib/auth.js';
 import { createRepositoryForStudent, createRepositoryForTeam } from '../services/repo.js';
 import { createTeam, addTeamMember, listTeamsForTrabalho } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
+import { trabalhoLiberado } from '../lib/janela.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
 
@@ -45,21 +46,6 @@ export async function alunoRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const requesterId = request.user!.id;
 
-    // Database repo query helper to optimize nested async lookups
-    const dbRepoCache = await prisma.repositorio.findMany({
-      include: { entregas: true }
-    });
-
-    function mRepositorioForStudent(trabalhos: any[], trabalhoId: number, studentId: number) {
-      const matched = dbRepoCache.find(r => r.trabalho_id === trabalhoId && r.dono_tipo === 'ALUNO' && r.usuario_id === studentId);
-      return matched ? { id: matched.id, nome_completo: matched.nome_completo, github_repo_id: matched.github_repo_id } : null;
-    }
-
-    function mRepositorioForTeam(trabalhos: any[], trabalhoId: number, teamIds: number[]) {
-      const matched = dbRepoCache.find(r => r.trabalho_id === trabalhoId && r.dono_tipo === 'EQUIPE' && r.equipe_id && teamIds.includes(r.equipe_id));
-      return matched ? { id: matched.id, nome_completo: matched.nome_completo, github_repo_id: matched.github_repo_id } : null;
-    }
-
     // Get all turmas the user is matriculated in
     const matriculas = await prisma.matricula.findMany({
       where: { usuario_id: requesterId },
@@ -81,45 +67,51 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       },
     });
 
-    const now = new Date();
+    // Equipes do aluno: o repositório de um trabalho em equipe pertence ao grupo,
+    // não a ele. Uma consulta só, em vez de uma por trabalho.
+    const equipesDoAluno = await prisma.equipeMembro.findMany({
+      where: { usuario_id: requesterId },
+      select: { equipe_id: true },
+    });
+    const equipeIds = new Set(equipesDoAluno.map((e) => e.equipe_id));
+
+    const agora = new Date();
 
     const result = matriculas.map((m) => {
       const turma = m.turma;
-      
-      const trabalhosWithStatus = turma.trabalhos.map((t) => {
-        // Find user's repo or user's team's repo for this trabalho
-        let repo = null;
-        if (t.tipo === 'INDIVIDUAL') {
-          repo = t.repositorios.find(r => r.usuario_id === requesterId);
-        } else {
-          // Find if user belongs to any team for this trabalho
-          // We can query this to be absolutely certain
-          repo = t.repositorios.find(async (r) => {
-            if (r.equipe_id) {
-              const count = await prisma.equipeMembro.count({
-                where: { equipe_id: r.equipe_id, usuario_id: requesterId }
-              });
-              return count > 0;
-            }
-            return false;
-          });
-        }
 
-        // Determine status
-        let status: 'sem repo' | 'em andamento' | 'congelado' = 'sem repo';
-        if (repo) {
-          // If already has an Entrega record, or if deadline has passed and auto-freeze is active
-          const isFrozen = repo.entregas.length > 0 || (t.congelamento_automatico && now >= t.deadline);
+      const trabalhosWithStatus = turma.trabalhos.map((t) => {
+        const repo = t.tipo === 'INDIVIDUAL'
+          ? t.repositorios.find((r) => r.dono_tipo === 'ALUNO' && r.usuario_id === requesterId)
+          : t.repositorios.find((r) => r.dono_tipo === 'EQUIPE' && r.equipe_id !== null && equipeIds.has(r.equipe_id));
+
+        // Um repositório já criado destrava o trabalho mesmo que a janela tenha
+        // sido reagendada para o futuro: esconder o enunciado de quem já está
+        // trabalhando nele seria esconder o trabalho do próprio aluno.
+        const liberado = trabalhoLiberado(t.janela_inicio, agora) || Boolean(repo);
+
+        let status: 'agendado' | 'sem repo' | 'em andamento' | 'congelado' = 'sem repo';
+        if (!liberado) {
+          status = 'agendado';
+        } else if (repo) {
+          // Congelado quando já existe Entrega, ou quando o prazo passou e o
+          // congelamento automático está ligado.
+          const isFrozen = repo.entregas.length > 0 || (t.congelamento_automatico && agora >= t.deadline);
           status = isFrozen ? 'congelado' : 'em andamento';
         }
 
         return {
           id: t.id,
           titulo: t.titulo,
-          descricao_md: t.descricao_md,
+          // Antes da abertura o aluno vê que o trabalho existe e quando abre —
+          // nunca o que ele pede. Enunciado e prazo saem do payload, não são só
+          // escondidos na tela.
+          descricao_md: liberado ? t.descricao_md : null,
           slug: t.slug,
           tipo: t.tipo,
-          deadline: t.deadline,
+          janela_inicio: t.janela_inicio,
+          deadline: liberado ? t.deadline : null,
+          liberado,
           status,
           repositorio: repo ? {
             id: repo.id,
@@ -138,43 +130,7 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       };
     });
 
-    // Resolve the async repo checks for teams manually (to handle team repos cleanly)
-    // We can pre-fetch teams of this student to make it non-async and faster
-    const userTeams = await prisma.equipeMembro.findMany({
-      where: { usuario_id: requesterId },
-      select: { equipe_id: true }
-    });
-    const userTeamIds = userTeams.map(ut => ut.equipe_id);
-
-    const resolvedResult = result.map(tData => {
-      const trabalhos = tData.trabalhos.map(t => {
-        let repo = null;
-        if (t.tipo === 'INDIVIDUAL') {
-          repo = mRepositorioForStudent(tData.trabalhos, t.id, requesterId);
-        } else {
-          repo = mRepositorioForTeam(tData.trabalhos, t.id, userTeamIds);
-        }
-
-        let status: 'sem repo' | 'em andamento' | 'congelado' = 'sem repo';
-        if (repo) {
-          const matchedDbRepo = dbRepoCache.find(r => r.id === repo.id);
-          const isFrozen = (matchedDbRepo?.entregas.length ?? 0) > 0 || (new Date(t.deadline) <= now);
-          status = isFrozen ? 'congelado' : 'em andamento';
-        }
-
-        return {
-          ...t,
-          status,
-          repositorio: repo,
-        };
-      });
-      return {
-        ...tData,
-        trabalhos,
-      };
-    });
-
-    return reply.send(serializeBigInt(resolvedResult));
+    return reply.send(serializeBigInt(result));
   });
 
   // 2. POST /trabalhos/:id/repositorio -> creates repo for the student
@@ -201,7 +157,8 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       const dbRepo = await createRepositoryForStudent(requesterId, trabalhoId);
       return reply.status(201).send(serializeBigInt(dbRepo));
     } catch (err: any) {
-      return reply.status(400).send({ error: err.message });
+      // TrabalhoNaoLiberadoError carrega 403; o resto continua caindo em 400.
+      return reply.status(err.statusCode || 400).send({ error: err.message });
     }
   });
 
@@ -341,7 +298,8 @@ export async function alunoRoutes(fastify: FastifyInstance) {
       const dbRepo = await createRepositoryForTeam(equipeId, team.trabalho_id);
       return reply.status(201).send(serializeBigInt(dbRepo));
     } catch (err: any) {
-      return reply.status(400).send({ error: err.message });
+      // TrabalhoNaoLiberadoError carrega 403; o resto continua caindo em 400.
+      return reply.status(err.statusCode || 400).send({ error: err.message });
     }
   });
 
