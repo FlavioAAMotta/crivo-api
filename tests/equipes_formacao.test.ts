@@ -34,16 +34,25 @@ describe('formação da equipe antes do repositório', () => {
   it('exige pelo menos dois integrantes para finalizar', async () => {
     vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
       id: 3, lider_id: 10, formada_em: null, membros: [{ usuario_id: 10 }], repositorios: [],
-      trabalho: { max_integrantes_equipe: 4 },
+      trabalho: { min_integrantes_equipe: 2, max_integrantes_equipe: 4 },
     } as any);
     await expect(finalizeTeam(3, 10)).rejects.toThrow(/pelo menos 2/);
+    expect(prisma.equipe.update).not.toHaveBeenCalled();
+  });
+
+  it('respeita um mínimo maior que dois configurado no trabalho', async () => {
+    vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
+      id: 3, lider_id: 10, formada_em: null, membros: [{ usuario_id: 10 }, { usuario_id: 11 }], repositorios: [],
+      trabalho: { min_integrantes_equipe: 3, max_integrantes_equipe: 4 },
+    } as any);
+    await expect(finalizeTeam(3, 10)).rejects.toThrow(/pelo menos 3/);
     expect(prisma.equipe.update).not.toHaveBeenCalled();
   });
 
   it('finaliza uma equipe válida', async () => {
     vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
       id: 3, lider_id: 10, formada_em: null, membros: [{ usuario_id: 10 }, { usuario_id: 11 }], repositorios: [],
-      trabalho: { max_integrantes_equipe: 4 },
+      trabalho: { min_integrantes_equipe: 2, max_integrantes_equipe: 4 },
     } as any);
     vi.mocked(prisma.equipe.update).mockResolvedValue({ id: 3, formada_em: new Date() } as any);
     await finalizeTeam(3, 10);

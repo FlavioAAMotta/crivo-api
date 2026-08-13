@@ -134,6 +134,7 @@ model Trabalho {
   janela_inicio         DateTime
   deadline              DateTime
   congelamento_automatico Boolean     @default(true)
+  min_integrantes_equipe  Int         @default(2)
   max_integrantes_equipe  Int         @default(4)
   criado_em             DateTime     @default(now())
 

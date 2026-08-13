@@ -112,6 +112,7 @@ export async function alunoRoutes(fastify: FastifyInstance) {
           descricao_md: liberado ? t.descricao_md : null,
           slug: t.slug,
           tipo: t.tipo,
+          min_integrantes_equipe: t.min_integrantes_equipe,
           max_integrantes_equipe: t.max_integrantes_equipe,
           janela_inicio: t.janela_inicio,
           deadline: liberado ? t.deadline : null,

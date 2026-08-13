@@ -45,13 +45,19 @@ const criarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)),
   deadline: z.string().transform(d => new Date(d)),
   congelamento_automatico: z.boolean().default(true),
+  min_integrantes_equipe: z.number().int().min(2).max(20).default(2),
   max_integrantes_equipe: z.number().int().min(2).max(20).default(4),
+}).refine(data => data.min_integrantes_equipe <= data.max_integrantes_equipe, {
+  message: 'min_integrantes_equipe must not exceed max_integrantes_equipe',
+  path: ['min_integrantes_equipe'],
 });
 
 // Edição de trabalho já criado. `turma_id` fica de fora de propósito: mover um
 // trabalho de turma deixaria repositórios, equipes e matrículas apontando para
 // a turma antiga. `tipo` só é aceito enquanto o trabalho não tem repositório
-// (ver a checagem no handler).
+// (ver a checagem no handler). `min`/`max_integrantes_equipe` são parciais aqui
+// pelo mesmo motivo da janela: um PATCH que mexe só numa ponta ainda pode
+// inverter a ordem, então a coerência é checada no handler contra o valor salvo.
 const atualizarTrabalhoBodySchema = z.object({
   titulo: z.string().min(3).optional(),
   descricao_md: z.string().optional(),
@@ -61,6 +67,7 @@ const atualizarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)).optional(),
   deadline: z.string().transform(d => new Date(d)).optional(),
   congelamento_automatico: z.boolean().optional(),
+  min_integrantes_equipe: z.number().int().min(2).max(20).optional(),
   max_integrantes_equipe: z.number().int().min(2).max(20).optional(),
 });
 
@@ -475,6 +482,15 @@ export async function professorRoutes(fastify: FastifyInstance) {
     const deadline = parsed.deadline ?? trabalho.deadline;
     if (deadline <= janelaInicio) {
       reply.status(400).send({ error: 'deadline must be after janela_inicio' });
+      return;
+    }
+
+    // Mesmo caso do par janela/deadline: min/max de integrantes são checados
+    // juntos contra o valor salvo, já que o PATCH pode mexer só numa ponta.
+    const minIntegrantes = parsed.min_integrantes_equipe ?? trabalho.min_integrantes_equipe;
+    const maxIntegrantes = parsed.max_integrantes_equipe ?? trabalho.max_integrantes_equipe;
+    if (minIntegrantes > maxIntegrantes) {
+      reply.status(400).send({ error: 'min_integrantes_equipe must not exceed max_integrantes_equipe' });
       return;
     }
 

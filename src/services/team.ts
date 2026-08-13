@@ -120,6 +120,7 @@ export async function listTeamsForTrabalho(trabalhoId: number, requesterId: numb
       total_integrantes: equipe.membros.length,
       tem_repositorio: temRepositorio,
       formada,
+      min_integrantes: trabalho.min_integrantes_equipe,
       max_integrantes: trabalho.max_integrantes_equipe,
       status: temRepositorio ? 'completo' : formada ? 'formada' : 'formando',
       sou_membro: equipe.membros.some(m => m.usuario_id === requesterId),
@@ -212,7 +213,9 @@ export async function finalizeTeam(equipeId: number, requesterId: number) {
   if (equipe.lider_id !== requesterId) throw new TeamError('Apenas o líder pode finalizar a equipe', 403);
   if (equipe.formada_em) return equipe;
   if (equipe.repositorios.length > 0) throw new TeamError('A equipe já possui repositório', 409);
-  if (equipe.membros.length < 2) throw new TeamError('Adicione pelo menos 2 integrantes antes de finalizar a equipe', 409);
+  if (equipe.membros.length < equipe.trabalho.min_integrantes_equipe) {
+    throw new TeamError(`Adicione pelo menos ${equipe.trabalho.min_integrantes_equipe} integrantes antes de finalizar a equipe`, 409);
+  }
   if (equipe.membros.length > equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe excede o limite do trabalho', 409);
   return prisma.equipe.update({ where: { id: equipeId }, data: { formada_em: new Date() } });
 }
