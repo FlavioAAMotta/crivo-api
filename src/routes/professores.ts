@@ -45,8 +45,8 @@ const criarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)),
   deadline: z.string().transform(d => new Date(d)),
   congelamento_automatico: z.boolean().default(true),
-  min_integrantes_equipe: z.number().int().min(2).max(20).default(2),
-  max_integrantes_equipe: z.number().int().min(2).max(20).default(4),
+  min_integrantes_equipe: z.number().int().min(1).max(20).default(2),
+  max_integrantes_equipe: z.number().int().min(1).max(20).default(4),
 }).refine(data => data.min_integrantes_equipe <= data.max_integrantes_equipe, {
   message: 'min_integrantes_equipe must not exceed max_integrantes_equipe',
   path: ['min_integrantes_equipe'],
@@ -67,8 +67,8 @@ const atualizarTrabalhoBodySchema = z.object({
   janela_inicio: z.string().transform(d => new Date(d)).optional(),
   deadline: z.string().transform(d => new Date(d)).optional(),
   congelamento_automatico: z.boolean().optional(),
-  min_integrantes_equipe: z.number().int().min(2).max(20).optional(),
-  max_integrantes_equipe: z.number().int().min(2).max(20).optional(),
+  min_integrantes_equipe: z.number().int().min(1).max(20).optional(),
+  max_integrantes_equipe: z.number().int().min(1).max(20).optional(),
 });
 
 const gradeQuerySchema = z.object({ trabalho_id: z.string().transform(Number) });

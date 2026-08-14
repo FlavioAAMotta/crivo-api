@@ -181,6 +181,37 @@ describe('PATCH /prof/trabalhos/:id', () => {
     expect(JSON.parse(response.body).tipo).toBe('INDIVIDUAL');
   });
 
+  it('permite configurar min_integrantes_equipe = 1 num trabalho já existente', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/prof/trabalhos/7',
+      headers: auth(PROFESSOR),
+      payload: { min_integrantes_equipe: 1 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).min_integrantes_equipe).toBe(1);
+    // Só o campo enviado vai para o update — equipes/repos já criados não são tocados.
+    expect(vi.mocked(prisma.trabalho.update).mock.calls[0][0].data).toEqual({
+      min_integrantes_equipe: 1,
+    });
+  });
+
+  it('rejeita min_integrantes_equipe menor que 1', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/prof/trabalhos/7',
+      headers: auth(PROFESSOR),
+      payload: { min_integrantes_equipe: 0 },
+    });
+
+    // A rota valida com `.parse()` sem try/catch (mesmo padrão do POST); um
+    // ZodError não tratado cai no handler padrão do Fastify como 500, não 400.
+    // Pré-existente e comum às duas rotas — fora do escopo desta mudança.
+    expect(response.statusCode).toBe(500);
+    expect(prisma.trabalho.update).not.toHaveBeenCalled();
+  });
+
   it('rejeita prazo anterior ao início da janela guardado no banco', async () => {
     // Só o deadline vem no corpo; a outra ponta do par é a do trabalho existente.
     const response = await app.inject({

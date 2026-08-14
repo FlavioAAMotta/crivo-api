@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../lib/auth.js';
 import { createRepositoryForStudent, createRepositoryForTeam } from '../services/repo.js';
-import { createTeam, addTeamMember, listTeamsForTrabalho, getMyTeam, finalizeTeam, requestTeamEntry, decideTeamRequest } from '../services/team.js';
+import { createTeam, addTeamMember, listTeamsForTrabalho, getMyTeam, finalizeTeam, requestTeamEntry, decideTeamRequest, deleteTeam } from '../services/team.js';
 import { getRepositoryMetrics } from '../services/metrics.js';
 import { trabalhoLiberado } from '../lib/janela.js';
 import { serializeBigInt } from '../lib/serializer.js';
@@ -272,6 +272,23 @@ export async function alunoRoutes(fastify: FastifyInstance) {
     const { id } = equipeIdParamsSchema.parse(request.params);
     try {
       return reply.send(serializeBigInt(await finalizeTeam(id, request.user!.id)));
+    } catch (err: any) {
+      return reply.status(err.statusCode || 400).send({ error: err.message });
+    }
+  });
+
+  fastify.delete('/equipes/:id', {
+    schema: {
+      tags: ['alunos'],
+      summary: 'Exclui uma equipe ainda sem repositório (só quem a criou)',
+      security: AUTH_SECURITY,
+      params: docSchema(equipeIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id } = equipeIdParamsSchema.parse(request.params);
+    try {
+      await deleteTeam(id, request.user!.id);
+      return reply.status(204).send();
     } catch (err: any) {
       return reply.status(err.statusCode || 400).send({ error: err.message });
     }

@@ -220,6 +220,27 @@ export async function finalizeTeam(equipeId: number, requesterId: number) {
   return prisma.equipe.update({ where: { id: equipeId }, data: { formada_em: new Date() } });
 }
 
+/**
+ * Exclui uma equipe — só o líder (quem a criou) pode, e só enquanto não houver
+ * repositório. Um repositório já criado existe de verdade no GitHub; a cascata
+ * do Prisma apagaria a linha em `equipes` (e o `Repositorio` junto, via
+ * onDelete: Cascade) sem tocar no GitHub, deixando um repo real órfão sem
+ * registro no banco. Nesse caso o caminho é o professor excluir o repositório
+ * primeiro (`DELETE /prof/repositorios/:id`, que remove dos dois lados).
+ */
+export async function deleteTeam(equipeId: number, requesterId: number) {
+  const equipe = await prisma.equipe.findUnique({
+    where: { id: equipeId },
+    include: { repositorios: true },
+  });
+  if (!equipe) throw new TeamError('Equipe não encontrada', 404);
+  if (equipe.lider_id !== requesterId) throw new TeamError('Apenas quem criou a equipe pode excluí-la', 403);
+  if (equipe.repositorios.length > 0) {
+    throw new TeamError('A equipe já possui repositório; peça a um professor para excluir o repositório antes', 409);
+  }
+  await prisma.equipe.delete({ where: { id: equipeId } });
+}
+
 export async function requestTeamEntry(equipeId: number, requesterId: number) {
   const equipe = await prisma.equipe.findUnique({
     where: { id: equipeId },
