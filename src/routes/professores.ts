@@ -1138,17 +1138,19 @@ export async function professorRoutes(fastify: FastifyInstance) {
     const octokit = await getInstallationOctokit();
     const nomeArquivo = `${slugParaArquivo(trabalho.slug)}-${slugParaArquivo(rotuloEntrega)}.zip`;
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="${nomeArquivo}"`,
-    });
-
     const archive = new ZipArchive({ zlib: { level: 6 } });
     archive.on('error', (err: Error) => {
       logger.error({ err: err.message, trabalhoId, entregaAgendadaId }, 'Error streaming entregas zip');
-      reply.raw.destroy(err);
+      archive.destroy(err);
     });
-    archive.pipe(reply.raw);
+
+    // Entrega o stream pelo Fastify, em vez de escrever diretamente em
+    // reply.raw. Assim os hooks (principalmente o @fastify/cors) conseguem
+    // anexar seus headers antes de a resposta começar.
+    reply
+      .type('application/zip')
+      .header('Content-Disposition', `attachment; filename="${nomeArquivo}"`)
+      .send(archive);
 
     for (const entrega of entregas) {
       const repo = entrega.repositorio;
@@ -1175,6 +1177,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
     }
 
     await archive.finalize();
+    return reply;
   });
 }
 export default professorRoutes;

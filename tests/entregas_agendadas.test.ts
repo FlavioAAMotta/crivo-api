@@ -260,12 +260,17 @@ describe('GET /prof/trabalhos/:id/entregas/download', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/prof/trabalhos/7/entregas/download',
-      headers: auth(PROFESSOR),
+      headers: {
+        ...auth(PROFESSOR),
+        origin: 'http://localhost:5173',
+      },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toBe('application/zip');
     expect(response.headers['content-disposition']).toContain('trabalho-2');
+    expect(response.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+    expect(response.headers['access-control-expose-headers']).toBe('Content-Disposition');
     // Assinatura de um arquivo zip (local file header) — confirma que o corpo
     // é um zip de verdade, não só um content-type mentiroso.
     expect(response.rawPayload.subarray(0, 2).toString()).toBe('PK');

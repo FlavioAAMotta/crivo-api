@@ -44,6 +44,8 @@ export function buildApp() {
     origin: config.FRONTEND_URL,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    // O front usa este header para preservar o nome sugerido dos arquivos ZIP.
+    exposedHeaders: ['Content-Disposition'],
   });
 
   // Register OpenAPI docs (served at /docs)
