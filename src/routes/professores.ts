@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { ZipArchive } from 'archiver';
 import { prisma } from '../lib/prisma.js';
 import { requireProfessor } from '../lib/auth.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
@@ -93,6 +94,31 @@ const trabalhoIdParamsSchema = z.object({ id: z.string().transform(Number) });
 // force=true recongela repositórios que já possuem entrega, criando entrega-N+1.
 const congelarQuerySchema = z.object({
   force: z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
+});
+
+// Marco de entrega agendado: um trabalho pode ter N destes, além do deadline
+// único (que não é tocado por nenhuma rota abaixo).
+const criarEntregaAgendadaBodySchema = z.object({
+  nome: z.string().min(2),
+  // Aceita datas no passado de propósito: é o que permite criar uma entrega
+  // retroativa (o congelador busca o commit que era HEAD na data informada).
+  data_hora: z.string().transform(d => new Date(d)),
+  congelamento_automatico: z.boolean().default(true),
+});
+
+const atualizarEntregaAgendadaBodySchema = z.object({
+  nome: z.string().min(2).optional(),
+  data_hora: z.string().transform(d => new Date(d)).optional(),
+  congelamento_automatico: z.boolean().optional(),
+});
+
+const entregaAgendadaParamsSchema = z.object({
+  id: z.string().transform(Number),
+  entregaAgendadaId: z.string().transform(Number),
+});
+
+const downloadEntregasQuerySchema = z.object({
+  entrega_agendada_id: z.string().transform(Number).optional(),
 });
 
 const AUTH_SECURITY: Record<string, string[]>[] = [{ cookieAuth: [] }, { bearerAuth: [] }];
@@ -896,5 +922,269 @@ export async function professorRoutes(fastify: FastifyInstance) {
 
     return reply.send({ success: true, message: 'Freezing routine executed for this trabalho' });
   });
+
+  // ==========================================
+  // 9. CRUD /prof/trabalhos/:id/entregas-agendadas
+  // ==========================================
+  //
+  // Marcos de entrega além do deadline único do trabalho (que estas rotas
+  // nunca tocam). Cada marco gera, quando congelado, uma Entrega normal
+  // (mesma tag entrega-N por repositório) com entrega_agendada_id apontando
+  // para ele. `data_hora` no passado + POST .../congelar é como se cria uma
+  // entrega retroativa: ver `congelarUmMarco` em src/jobs/congelador.ts.
+
+  fastify.get('/prof/trabalhos/:id/entregas-agendadas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lista os marcos de entrega agendados de um trabalho',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId } = trabalhoIdParamsSchema.parse(request.params);
+
+    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId } });
+    if (!trabalho) {
+      reply.status(404).send({ error: 'Trabalho not found' });
+      return;
+    }
+
+    const marcos = await prisma.entregaAgendada.findMany({
+      where: { trabalho_id: trabalhoId },
+      include: { entregas: true },
+      orderBy: { data_hora: 'asc' },
+    });
+
+    return reply.send(
+      marcos.map(({ entregas, ...marco }) => ({
+        ...marco,
+        repositorios_congelados: entregas.length,
+      }))
+    );
+  });
+
+  fastify.post('/prof/trabalhos/:id/entregas-agendadas', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Cria um marco de entrega agendado (data pode ser retroativa)',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+      body: docSchema(criarEntregaAgendadaBodySchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId } = trabalhoIdParamsSchema.parse(request.params);
+    const parsed = criarEntregaAgendadaBodySchema.parse(request.body);
+
+    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId } });
+    if (!trabalho) {
+      reply.status(404).send({ error: 'Trabalho not found' });
+      return;
+    }
+
+    try {
+      const criado = await prisma.entregaAgendada.create({
+        data: { trabalho_id: trabalhoId, ...parsed },
+      });
+      return reply.status(201).send(criado);
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        reply.status(409).send({ error: 'Já existe um marco com este nome neste trabalho' });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  fastify.patch('/prof/trabalhos/:id/entregas-agendadas/:entregaAgendadaId', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Edita um marco de entrega agendado (campos parciais)',
+      security: AUTH_SECURITY,
+      params: docSchema(entregaAgendadaParamsSchema),
+      body: docSchema(atualizarEntregaAgendadaBodySchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId, entregaAgendadaId } = entregaAgendadaParamsSchema.parse(request.params);
+    const parsed = atualizarEntregaAgendadaBodySchema.parse(request.body);
+
+    const marco = await prisma.entregaAgendada.findFirst({
+      where: { id: entregaAgendadaId, trabalho_id: trabalhoId },
+    });
+    if (!marco) {
+      reply.status(404).send({ error: 'Marco de entrega not found' });
+      return;
+    }
+
+    try {
+      const atualizado = await prisma.entregaAgendada.update({
+        where: { id: entregaAgendadaId },
+        data: parsed,
+      });
+      return reply.send(atualizado);
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        reply.status(409).send({ error: 'Já existe um marco com este nome neste trabalho' });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  fastify.delete('/prof/trabalhos/:id/entregas-agendadas/:entregaAgendadaId', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Exclui um marco de entrega agendado que ainda não gerou nenhuma entrega',
+      security: AUTH_SECURITY,
+      params: docSchema(entregaAgendadaParamsSchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId, entregaAgendadaId } = entregaAgendadaParamsSchema.parse(request.params);
+
+    const marco = await prisma.entregaAgendada.findFirst({
+      where: { id: entregaAgendadaId, trabalho_id: trabalhoId },
+      include: { entregas: true },
+    });
+    if (!marco) {
+      reply.status(404).send({ error: 'Marco de entrega not found' });
+      return;
+    }
+
+    // Um marco que já congelou algum repositório carrega evidência — excluir
+    // apagaria o vínculo, não o registro (onDelete: SetNull), mas escondê-lo
+    // da lista confundiria mais do que ajudaria. Bloqueado, como a exclusão
+    // de sinalizações decididas.
+    if (marco.entregas.length > 0) {
+      reply.status(409).send({
+        error: `Este marco já gerou ${marco.entregas.length} entrega(s) — não pode ser excluído`,
+      });
+      return;
+    }
+
+    await prisma.entregaAgendada.delete({ where: { id: entregaAgendadaId } });
+    return reply.status(204).send();
+  });
+
+  fastify.post('/prof/trabalhos/:id/entregas-agendadas/:entregaAgendadaId/congelar', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Congela agora os repositórios deste marco (pode ser retroativo)',
+      security: AUTH_SECURITY,
+      params: docSchema(entregaAgendadaParamsSchema),
+      querystring: docSchema(congelarQuerySchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId, entregaAgendadaId } = entregaAgendadaParamsSchema.parse(request.params);
+    const { force } = congelarQuerySchema.parse(request.query);
+
+    const marco = await prisma.entregaAgendada.findFirst({
+      where: { id: entregaAgendadaId, trabalho_id: trabalhoId },
+    });
+    if (!marco) {
+      reply.status(404).send({ error: 'Marco de entrega not found' });
+      return;
+    }
+
+    await runCongelador({ entregaAgendadaId, force });
+
+    return reply.send({ success: true, message: 'Freezing routine executed for this marco' });
+  });
+
+  // ==========================================
+  // 10. GET /prof/trabalhos/:id/entregas/download
+  // ==========================================
+
+  fastify.get('/prof/trabalhos/:id/entregas/download', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Baixa um .zip com o código de todos os repositórios de uma entrega',
+      security: AUTH_SECURITY,
+      params: docSchema(trabalhoIdParamsSchema),
+      querystring: docSchema(downloadEntregasQuerySchema),
+    },
+  }, async (request, reply) => {
+    const { id: trabalhoId } = trabalhoIdParamsSchema.parse(request.params);
+    const { entrega_agendada_id: entregaAgendadaId } = downloadEntregasQuerySchema.parse(request.query);
+
+    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId } });
+    if (!trabalho) {
+      reply.status(404).send({ error: 'Trabalho not found' });
+      return;
+    }
+
+    let rotuloEntrega = 'entrega';
+    if (entregaAgendadaId) {
+      const marco = await prisma.entregaAgendada.findFirst({
+        where: { id: entregaAgendadaId, trabalho_id: trabalhoId },
+      });
+      if (!marco) {
+        reply.status(404).send({ error: 'Marco de entrega not found' });
+        return;
+      }
+      rotuloEntrega = marco.nome;
+    }
+
+    const entregas = await prisma.entrega.findMany({
+      where: { trabalho_id: trabalhoId, entrega_agendada_id: entregaAgendadaId ?? null },
+      include: {
+        repositorio: { include: { usuario: true, equipe: true } },
+      },
+    });
+
+    if (entregas.length === 0) {
+      reply.status(404).send({ error: 'Nenhuma entrega congelada encontrada para este momento' });
+      return;
+    }
+
+    const octokit = await getInstallationOctokit();
+    const nomeArquivo = `${slugParaArquivo(trabalho.slug)}-${slugParaArquivo(rotuloEntrega)}.zip`;
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${nomeArquivo}"`,
+    });
+
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    archive.on('error', (err: Error) => {
+      logger.error({ err: err.message, trabalhoId, entregaAgendadaId }, 'Error streaming entregas zip');
+      reply.raw.destroy(err);
+    });
+    archive.pipe(reply.raw);
+
+    for (const entrega of entregas) {
+      const repo = entrega.repositorio;
+      const [owner, repoName] = repo.nome_completo.split('/');
+      const nomeDono = repo.dono_tipo === 'EQUIPE'
+        ? (repo.equipe?.nome ?? repoName)
+        : (repo.usuario?.nome ?? repoName);
+      const nomeCurto = slugParaArquivo(nomeDono);
+
+      try {
+        const { data } = await withGithubRetry(() =>
+          octokit.rest.repos.downloadZipballArchive({ owner, repo: repoName, ref: entrega.sha_congelado })
+        );
+        archive.append(Buffer.from(data as ArrayBuffer), { name: `${nomeCurto}.zip` });
+      } catch (err: any) {
+        // Um repositório com falha (ex.: excluído do GitHub depois de congelado)
+        // não deve interromper o zip inteiro — o professor vê o motivo dentro dele.
+        logger.error({ err: err.message, repoName: repo.nome_completo }, 'Failed to download repo zipball for entregas bundle');
+        archive.append(
+          `Não foi possível baixar ${repo.nome_completo} no commit ${entrega.sha_congelado}: ${err.message}`,
+          { name: `ERRO-${nomeCurto}.txt` }
+        );
+      }
+    }
+
+    await archive.finalize();
+  });
 }
 export default professorRoutes;
+
+/** Nome de arquivo seguro a partir de um texto livre (nome de aluno/equipe, título de trabalho). */
+function slugParaArquivo(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'sem-nome';
+}

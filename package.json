@@ -33,6 +33,7 @@
     "@fastify/swagger": "^9.8.1",
     "@fastify/swagger-ui": "^6.1.0",
     "@prisma/client": "^6.19.3",
+    "archiver": "^8.0.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.80.9",
     "dotenv": "^17.4.2",
@@ -44,6 +45,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/archiver": "^8.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.1",

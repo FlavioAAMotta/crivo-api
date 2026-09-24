@@ -142,8 +142,34 @@ model Trabalho {
   equipes               Equipe[]
   repositorios          Repositorio[]
   entregas              Entrega[]
+  entregas_agendadas    EntregaAgendada[]
 
   @@map("trabalhos")
+}
+
+/**
+ * Marco de entrega agendado: um trabalho pode ter N destes, além do `deadline`
+ * único (que continua intocado — trava a janela do trabalho, D16). Cada marco
+ * é um ponto de controle adicional (checkpoint, entrega parcial) com sua
+ * própria data/hora; o congelador (`src/jobs/congelador.ts`) usa o commit que
+ * era HEAD de `main` NAQUELA data (via GitHub `listCommits ... until`), não o
+ * HEAD atual — é o que permite criar um marco retroativo e congelar
+ * corretamente mesmo dias depois.
+ */
+model EntregaAgendada {
+  id                      Int      @id @default(autoincrement())
+  trabalho_id             Int
+  nome                    String
+  data_hora               DateTime
+  congelamento_automatico Boolean  @default(true)
+  criado_em               DateTime @default(now())
+
+  trabalho                Trabalho  @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  entregas                Entrega[]
+
+  @@unique([trabalho_id, nome])
+  @@index([trabalho_id, data_hora])
+  @@map("entregas_agendadas")
 }
 
 model Equipe {
@@ -253,15 +279,19 @@ model Commit {
 }
 
 model Entrega {
-  id             Int      @id @default(autoincrement())
-  repositorio_id Int
-  trabalho_id    Int
-  sha_congelado  String
-  tag            String   // ex.: entrega-1
-  congelado_em   DateTime @default(now())
+  id                  Int      @id @default(autoincrement())
+  repositorio_id      Int
+  trabalho_id         Int
+  // Null = entrega do deadline único do trabalho (comportamento original).
+  // Preenchido = entrega gerada por um EntregaAgendada (marco extra).
+  entrega_agendada_id Int?
+  sha_congelado       String
+  tag                 String   // ex.: entrega-1
+  congelado_em        DateTime @default(now())
 
-  repositorio    Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
-  trabalho       Trabalho    @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  repositorio      Repositorio      @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  trabalho         Trabalho         @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  entrega_agendada EntregaAgendada? @relation(fields: [entrega_agendada_id], references: [id], onDelete: SetNull)
 
   @@map("entregas")
 }
