@@ -91,7 +91,15 @@ describe('PUT /prof/repositorios/:id/avaliacao', () => {
     });
   });
 
-  it('rejeita nota fora do intervalo 0-10', async () => {
+  it('aceita nota fora do intervalo 0-10 (escala livre por enquanto)', async () => {
+    vi.mocked(prisma.avaliacao.upsert).mockResolvedValue({
+      id: 1,
+      repositorio_id: 1,
+      nota: 11,
+      comentario: null,
+      avaliado_por: PROFESSOR.id,
+    } as any);
+
     const response = await app.inject({
       method: 'PATCH',
       url: '/prof/repositorios/1/avaliacao',
@@ -99,8 +107,9 @@ describe('PUT /prof/repositorios/:id/avaliacao', () => {
       payload: { nota: 11 },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(prisma.avaliacao.upsert).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.nota).toBe(11);
   });
 
   it('retorna 404 para repositório inexistente', async () => {

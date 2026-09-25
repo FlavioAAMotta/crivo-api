@@ -78,8 +78,9 @@ const repositorioIdParamsSchema = z.object({ id: z.string().transform(Number) })
 
 // Nota e comentário são independentes: o professor pode salvar só um deles
 // primeiro (ex.: comentar antes de decidir a nota) e completar depois.
+// Sem faixa fixa (0-10) por enquanto: a escala ainda está sendo definida.
 const avaliacaoBodySchema = z.object({
-  nota: z.number().min(0).max(10).nullable().optional(),
+  nota: z.number().nullable().optional(),
   comentario: z.string().max(5000).nullable().optional(),
 });
 
