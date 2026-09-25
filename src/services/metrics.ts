@@ -1,6 +1,13 @@
 import { prisma } from '../lib/prisma.js';
 import { serializeBigInt } from '../lib/serializer.js';
 
+interface CommitArquivo {
+  arquivo: string;
+  status: string;
+  adicoes: number;
+  remocoes: number;
+}
+
 export async function getRepositoryMetrics(repoId: number) {
   const repo = await prisma.repositorio.findUnique({
     where: { id: repoId },
@@ -61,6 +68,9 @@ export async function getRepositoryMetrics(repoId: number) {
       deletions: c.deletions,
       stats_status: c.stats_status,
       committed_em: c.committed_em,
+      // null enquanto stats_status !== CALCULADO, ou quando o GitHub trunca a
+      // lista de um commit gigante (ver src/jobs/worker.ts).
+      arquivos: (c.arquivos_json as CommitArquivo[] | null) ?? null,
     };
   });
 

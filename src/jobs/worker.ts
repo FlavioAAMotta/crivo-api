@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { Prisma } from '@prisma/client';
 import { config } from '../lib/config.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -39,6 +40,15 @@ export const statsWorker = new Worker(
 
       const additions = response.data.stats?.additions || 0;
       const deletions = response.data.stats?.deletions || 0;
+      // `files` vem na mesma resposta de `getCommit` — sem chamada extra ao GitHub.
+      // Ausente/truncado em commits gigantes (o GitHub limita a lista), então null
+      // nesse caso em vez de gravar uma lista incompleta como se fosse completa.
+      const arquivos = response.data.files?.map((f) => ({
+        arquivo: f.filename,
+        status: f.status,
+        adicoes: f.additions,
+        remocoes: f.deletions,
+      })) ?? null;
 
       // Update commit in database
       const updatedCommit = await prisma.commit.update({
@@ -46,6 +56,7 @@ export const statsWorker = new Worker(
         data: {
           additions,
           deletions,
+          arquivos_json: arquivos ?? Prisma.JsonNull,
           stats_status: 'CALCULADO',
         },
       });

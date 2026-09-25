@@ -270,6 +270,10 @@ model Commit {
   additions        Int?
   deletions        Int?
   stats_status     StatsStatus @default(PENDENTE)
+  // Lista de arquivos alterados no commit ([{ arquivo, status, adicoes, remocoes }]).
+  // Vem de graça na mesma chamada que já busca additions/deletions (`repos.getCommit`
+  // devolve `files`) — nenhuma requisição extra ao GitHub.
+  arquivos_json    Json?
 
   push             Push        @relation(fields: [push_id], references: [id], onDelete: Cascade)
   repositorio      Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
