@@ -76,6 +76,13 @@ const gradeQuerySchema = z.object({ trabalho_id: z.string().transform(Number) })
 
 const repositorioIdParamsSchema = z.object({ id: z.string().transform(Number) });
 
+// Nota e comentário são independentes: o professor pode salvar só um deles
+// primeiro (ex.: comentar antes de decidir a nota) e completar depois.
+const avaliacaoBodySchema = z.object({
+  nota: z.number().min(0).max(10).nullable().optional(),
+  comentario: z.string().max(5000).nullable().optional(),
+});
+
 const sinalizacoesQuerySchema = z.object({
   status: z.enum(['PENDENTE', 'PROCEDE', 'DESCARTADA']).optional(),
   tipo: z.enum(['DIVERGENCIA_PUSHER_AUTOR', 'SEM_ATIVIDADE', 'FORCE_PUSH', 'COMMIT_GIGANTE', 'AUTOR_NAO_RECONHECIDO']).optional(),
@@ -730,6 +737,43 @@ export async function professorRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       reply.status(404).send({ error: err.message });
     }
+  });
+
+  // ==========================================
+  // 6b. PATCH /prof/repositorios/:id/avaliacao
+  // ==========================================
+
+  fastify.patch('/prof/repositorios/:id/avaliacao', {
+    schema: {
+      tags: ['professores'],
+      summary: 'Lança ou atualiza a nota e o comentário da entrega de um repositório',
+      security: AUTH_SECURITY,
+      params: docSchema(repositorioIdParamsSchema),
+      body: docSchema(avaliacaoBodySchema),
+    },
+  }, async (request, reply) => {
+    const { id: repoId } = repositorioIdParamsSchema.parse(request.params);
+
+    const bodyParse = avaliacaoBodySchema.safeParse(request.body);
+    if (!bodyParse.success) {
+      reply.status(400).send({ error: bodyParse.error.issues[0]?.message ?? 'Invalid body' });
+      return;
+    }
+    const { nota, comentario } = bodyParse.data;
+
+    const repo = await prisma.repositorio.findUnique({ where: { id: repoId } });
+    if (!repo) {
+      reply.status(404).send({ error: 'Repository not found' });
+      return;
+    }
+
+    const avaliacao = await prisma.avaliacao.upsert({
+      where: { repositorio_id: repoId },
+      create: { repositorio_id: repoId, nota, comentario, avaliado_por: request.user!.id },
+      update: { nota, comentario, avaliado_por: request.user!.id },
+    });
+
+    return reply.send(serializeBigInt(avaliacao));
   });
 
   fastify.delete('/prof/repositorios/:id', {

@@ -74,6 +74,7 @@ model Usuario {
   repositorios      Repositorio[]
   revisoes          Sinalizacao[]  @relation("RevisorSinalizacao")
   commits           Commit[]
+  avaliacoes_feitas Avaliacao[]    @relation("AvaliadorAvaliacao")
 
   @@map("usuarios")
 }
@@ -234,6 +235,7 @@ model Repositorio {
   commits        Commit[]
   entregas       Entrega[]
   sinalizacoes   Sinalizacao[]
+  avaliacao      Avaliacao?
 
   @@map("repositorios")
 }
@@ -313,4 +315,26 @@ model Sinalizacao {
 
   @@index([status])
   @@map("sinalizacoes")
+}
+
+/**
+ * Nota e comentário lançados manualmente pelo professor sobre a entrega de um
+ * repositório (aluno ou equipe). Uma linha por repositório — corrigir de novo
+ * substitui a nota anterior, não acumula histórico. Nenhum detector ou métrica
+ * escreve aqui: é decisão do professor, nunca cálculo automático (D-corretude
+ * em docs/DECISOES.md).
+ */
+model Avaliacao {
+  id             Int      @id @default(autoincrement())
+  repositorio_id Int      @unique
+  nota           Float?
+  comentario     String?
+  avaliado_por   Int
+  criado_em      DateTime @default(now())
+  atualizado_em  DateTime @updatedAt
+
+  repositorio    Repositorio @relation(fields: [repositorio_id], references: [id], onDelete: Cascade)
+  professor      Usuario     @relation("AvaliadorAvaliacao", fields: [avaliado_por], references: [id])
+
+  @@map("avaliacoes")
 }

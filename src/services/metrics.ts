@@ -31,6 +31,7 @@ export async function getRepositoryMetrics(repoId: number) {
         },
         orderBy: { committed_em: 'desc' },
       },
+      avaliacao: true,
     },
   });
 
@@ -130,6 +131,13 @@ export async function getRepositoryMetrics(repoId: number) {
     commits: commitsList,
     timeline_commits: timeline,
     sinalizacoes: repo.sinalizacoes,
+    avaliacao: repo.avaliacao
+      ? {
+          nota: repo.avaliacao.nota,
+          comentario: repo.avaliacao.comentario,
+          atualizado_em: repo.avaliacao.atualizado_em,
+        }
+      : null,
   });
 }
 export default getRepositoryMetrics;
