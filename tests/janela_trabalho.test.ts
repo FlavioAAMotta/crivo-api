@@ -68,6 +68,31 @@ describe('janela do trabalho — GET /me/turmas', () => {
     vi.mocked(prisma.equipeMembro.findMany).mockResolvedValue([] as any);
   });
 
+  it('mostra uma vez o trabalho compartilhado ao aluno matriculado em duas subturmas', async () => {
+    const [matriculaPrincipal] = turmaComTrabalho(JA_ABRIU);
+    const trabalho = matriculaPrincipal.turma.trabalhos[0];
+    matriculaPrincipal.turma.trabalhos_vinculados = [{ trabalho }] as any;
+    const matriculaAdicional = { turma: {
+      id: 2, nome: 'Turma B', periodo: '2026.1', disciplina: matriculaPrincipal.turma.disciplina,
+      trabalhos: [], trabalhos_vinculados: [{ trabalho }],
+    } };
+    vi.mocked(prisma.matricula.findMany).mockResolvedValue([matriculaPrincipal, matriculaAdicional] as any);
+    const response = await app.inject({ method: 'GET', url: '/me/turmas', headers: auth });
+    expect(response.statusCode).toBe(200);
+    const turmas = response.json();
+    expect(turmas.flatMap((t: any) => t.trabalhos).map((t: any) => t.id)).toEqual([7]);
+  });
+
+  it('aluno matriculado depois da criação vê o trabalho vinculado à sua subturma', async () => {
+    const [principal] = turmaComTrabalho(JA_ABRIU);
+    const matriculaNova = { turma: { id: 2, nome: 'Turma B', periodo: '2026.1',
+      disciplina: principal.turma.disciplina, trabalhos: [],
+      trabalhos_vinculados: [{ trabalho: principal.turma.trabalhos[0] }] } };
+    vi.mocked(prisma.matricula.findMany).mockResolvedValue([matriculaNova] as any);
+    const response = await app.inject({ method: 'GET', url: '/me/turmas', headers: auth });
+    expect(response.json()[0].trabalhos.map((t: any) => t.id)).toEqual([7]);
+  });
+
   it('esconde enunciado e prazo enquanto o trabalho não abriu', async () => {
     vi.mocked(prisma.matricula.findMany).mockResolvedValue(turmaComTrabalho(DAQUI_A_POUCO) as any);
 
@@ -162,6 +187,31 @@ describe('janela do trabalho — o que trava e o que não trava antes da abertur
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('aceita matrícula na subturma vinculada para o repositório individual', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({ id: ALUNO.id, github_login: 'joaopsilva' } as any);
+    vi.mocked(prisma.trabalho.findUnique).mockResolvedValue({ id: 7, turma_id: 1, tipo: 'INDIVIDUAL',
+      janela_inicio: JA_ABRIU, turma: { disciplina: { codigo: 'ED' }, matriculas: [] },
+      turmas_vinculadas: [{ turma_id: 2, turma: { matriculas: [{ usuario_id: ALUNO.id }] } }],
+    } as any);
+    vi.mocked(prisma.repositorio.findFirst).mockResolvedValue({ id: 50 } as any);
+    const response = await app.inject({ method: 'POST', url: '/trabalhos/7/repositorio', headers: auth });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('Repository already exists');
+    expect(prisma.repositorio.findFirst).toHaveBeenCalled();
+  });
+
+  it('isola matrícula em turma não vinculada antes de consultar repositório', async () => {
+    vi.mocked(prisma.usuario.findUnique).mockResolvedValue({ id: ALUNO.id, github_login: 'joaopsilva' } as any);
+    vi.mocked(prisma.trabalho.findUnique).mockResolvedValue({ id: 7, turma_id: 1, tipo: 'INDIVIDUAL',
+      janela_inicio: JA_ABRIU, turma: { disciplina: { codigo: 'ED' }, matriculas: [] },
+      turmas_vinculadas: [{ turma_id: 2, turma: { matriculas: [] } }],
+    } as any);
+    const response = await app.inject({ method: 'POST', url: '/trabalhos/7/repositorio', headers: auth });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('not matriculated');
+    expect(prisma.repositorio.findFirst).not.toHaveBeenCalled();
   });
 
   it('recusa criar repositório individual antes da abertura (403)', async () => {

@@ -65,6 +65,9 @@ export async function alunoRoutes(fastify: FastifyInstance) {
                 },
               },
             },
+            trabalhos_vinculados: {
+              include: { trabalho: { include: { repositorios: { include: { entregas: true } } } } },
+            },
           },
         },
       },
@@ -79,11 +82,20 @@ export async function alunoRoutes(fastify: FastifyInstance) {
     const equipeIds = new Set(equipesDoAluno.map((e) => e.equipe_id));
 
     const agora = new Date();
+    const trabalhosVistos = new Set<number>();
 
     const result = matriculas.map((m) => {
       const turma = m.turma;
 
-      const trabalhosWithStatus = turma.trabalhos.map((t) => {
+      const trabalhosUnicos = [...new Map([
+        ...turma.trabalhos,
+        ...(turma.trabalhos_vinculados ?? []).map(v => v.trabalho),
+      ].map(t => [t.id, t])).values()];
+      const trabalhosWithStatus = trabalhosUnicos.filter(t => {
+        if (trabalhosVistos.has(t.id)) return false;
+        trabalhosVistos.add(t.id);
+        return true;
+      }).map((t) => {
         const repo = t.tipo === 'INDIVIDUAL'
           ? t.repositorios.find((r) => r.dono_tipo === 'ALUNO' && r.usuario_id === requesterId)
           : t.repositorios.find((r) => r.dono_tipo === 'EQUIPE' && r.equipe_id !== null && equipeIds.has(r.equipe_id));
@@ -197,7 +209,11 @@ export async function alunoRoutes(fastify: FastifyInstance) {
     schema: { tags: ['alunos'], summary: 'Retorna a equipe do aluno, inclusive antes do repositório', security: AUTH_SECURITY, params: docSchema(trabalhoIdParamsSchema) },
   }, async (request, reply) => {
     const { id } = trabalhoIdParamsSchema.parse(request.params);
-    return reply.send(serializeBigInt(await getMyTeam(id, request.user!.id)));
+    try {
+      return reply.send(serializeBigInt(await getMyTeam(id, request.user!.id)));
+    } catch (err: any) {
+      return reply.status(err.statusCode || 400).send({ error: err.message });
+    }
   });
 
   // 3. POST /trabalhos/:id/equipes { nome } -> creates team for a work

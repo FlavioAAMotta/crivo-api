@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { alunoParticipaDoTrabalho, matriculasDoTrabalho } from '../lib/subturmas.js';
 import { getInstallationOctokit, withGithubRetry } from '../lib/octokit.js';
 import { config } from '../lib/config.js';
 import { exigirTrabalhoLiberado } from '../lib/janela.js';
@@ -227,6 +228,7 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
           matriculas: true,
         },
       },
+      turmas_vinculadas: { include: { turma: { include: { matriculas: true } } } },
     },
   });
   
@@ -239,7 +241,7 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
   exigirTrabalhoLiberado(trabalho.janela_inicio);
 
   // Validate student is matriculated in the class
-  const isMatriculated = trabalho.turma.matriculas.some(m => m.usuario_id === usuarioId);
+  const isMatriculated = alunoParticipaDoTrabalho(trabalho, matriculasDoTrabalho(trabalho), usuarioId);
   if (!isMatriculated) {
     throw new Error('Student is not matriculated in this class');
   }
@@ -336,6 +338,7 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
           disciplina: true,
         },
       },
+      turmas_vinculadas: true,
     },
   });
   
@@ -365,9 +368,19 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   if (!equipe.formada_em) {
     throw new Error('Finalize a formação da equipe antes de criar o repositório');
   }
+  if (equipe.trabalho_id !== trabalhoId) throw new Error('Equipe não pertence a este trabalho');
+  const vinculo = await prisma.matricula.findMany({
+    where: { usuario_id: { in: equipe.membros.map(m => m.usuario_id) },
+      turma_id: { in: [trabalho.turma_id, ...(trabalho.turmas_vinculadas ?? []).map(v => v.turma_id)] } },
+    select: { usuario_id: true },
+  });
+  if (equipe.membros.some(m => !vinculo.some(v => v.usuario_id === m.usuario_id))) {
+    throw new Error('Integrante não pertence a este trabalho');
+  }
   
-  // Naming format: {codigo-disciplina}-{trabalho-slug}-{equipe-nome} normalized
-  const baseName = `${trabalho.turma.disciplina.codigo}-${trabalho.slug}-${equipe.nome}`;
+  // Em trabalhos compartilhados, equipes de subturmas diferentes podem ter o mesmo nome.
+  const compartilhado = (trabalho.turmas_vinculadas?.length ?? 1) > 1;
+  const baseName = `${trabalho.turma.disciplina.codigo}-${trabalho.slug}-${equipe.nome}${compartilhado ? `-equipe-${equipe.id}` : ''}`;
   const repoName = sanitizeRepoName(baseName);
   const fullName = `${config.GITHUB_ORG}/${repoName}`;
   

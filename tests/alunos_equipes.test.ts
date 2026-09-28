@@ -111,6 +111,17 @@ describe('GET /trabalhos/:id/equipes', () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it('permite quadro ao aluno da subturma adicional e rejeita turma não vinculada', async () => {
+    vi.mocked(prisma.trabalho.findUnique).mockResolvedValue({ ...trabalhoComEquipes(), turma_id: 1,
+      turma: { matriculas: [] },
+      turmas_vinculadas: [{ turma_id: 2, turma: { matriculas: [{ usuario_id: ALUNO_MATRICULADO.id }] } }],
+    } as any);
+    const permitido = await app.inject({ method: 'GET', url: '/trabalhos/1/equipes', headers: auth(ALUNO_MATRICULADO) });
+    const negado = await app.inject({ method: 'GET', url: '/trabalhos/1/equipes', headers: auth(ALUNO_DE_FORA) });
+    expect(permitido.statusCode).toBe(200);
+    expect(negado.statusCode).toBe(403);
+  });
+
   it('retorna 404 para trabalho inexistente', async () => {
     vi.mocked(prisma.trabalho.findUnique).mockResolvedValue(null as any);
 

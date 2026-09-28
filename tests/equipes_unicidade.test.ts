@@ -82,6 +82,18 @@ describe('um aluno, uma equipe por trabalho', () => {
     });
   });
 
+  it('aluno da subturma adicional cria equipe sem matrícula na principal', async () => {
+    vi.mocked(prisma.trabalho.findUnique).mockResolvedValue({ id: 7, turma_id: 1, tipo: 'EQUIPE',
+      turma: { matriculas: [] },
+      turmas_vinculadas: [{ turma_id: 2, turma: { matriculas: [{ usuario_id: ALUNO.id }] } }],
+    } as any);
+    vi.mocked(prisma.equipeMembro.findFirst).mockResolvedValue(null as any);
+    const response = await app.inject({ method: 'POST', url: '/trabalhos/7/equipes', headers: auth,
+      payload: { nome: 'Grupo da subturma B' } });
+    expect(response.statusCode).toBe(201);
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
   it('recusa adicionar colega que já está em outro grupo do mesmo trabalho', async () => {
     vi.mocked(prisma.equipe.findUnique).mockResolvedValue({
       id: 9,

@@ -6,6 +6,7 @@ import { getInstallationOctokit } from '../src/lib/octokit.js';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
+    matricula: { findMany: vi.fn() },
     equipe: { findUnique: vi.fn(), update: vi.fn() },
     trabalho: { findUnique: vi.fn() },
     repositorio: { findFirst: vi.fn(), create: vi.fn() },
@@ -29,6 +30,24 @@ describe('formação da equipe antes do repositório', () => {
 
     await expect(createRepositoryForTeam(3, 7)).rejects.toThrow(/Finalize a formação/);
     expect(getInstallationOctokit).not.toHaveBeenCalled();
+  });
+
+  it('diferencia nomes iguais de equipes em subturmas distintas', async () => {
+    vi.mocked(prisma.equipe.findUnique).mockResolvedValue({ id: 3, trabalho_id: 7,
+      nome: 'Grupo 01', formada_em: new Date(), membros: [{ usuario_id: 20, usuario: { github_login: 'alunob' } }],
+    } as any);
+    vi.mocked(prisma.trabalho.findUnique).mockResolvedValue({ id: 7, turma_id: 1,
+      turmas_vinculadas: [{ turma_id: 1 }, { turma_id: 2 }],
+      turma: { disciplina: { codigo: 'ED' } }, slug: 't1', titulo: 'T1', template_repo: 'org/template',
+      janela_inicio: new Date(Date.now() - 60_000),
+    } as any);
+    vi.mocked(prisma.repositorio.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.matricula.findMany).mockResolvedValue([{ usuario_id: 20 }] as any);
+    vi.mocked(prisma.repositorio.create).mockResolvedValue({ id: 50 } as any);
+    const criarNoGithub = vi.fn().mockResolvedValue({ data: { id: 500 } });
+    vi.mocked(getInstallationOctokit).mockResolvedValue({ rest: { repos: { createUsingTemplate: criarNoGithub } } } as any);
+    await createRepositoryForTeam(3, 7);
+    expect(criarNoGithub).toHaveBeenCalledWith(expect.objectContaining({ name: 'ed-t1-grupo-01-equipe-3' }));
   });
 
   it('exige pelo menos dois integrantes para finalizar', async () => {

@@ -109,6 +109,7 @@ model Turma {
   disciplina    Disciplina @relation(fields: [disciplina_id], references: [id], onDelete: Cascade)
   matriculas    Matricula[]
   trabalhos     Trabalho[]
+  trabalhos_vinculados TrabalhoTurma[]
 
   @@map("turmas")
 }
@@ -140,12 +141,24 @@ model Trabalho {
   criado_em             DateTime     @default(now())
 
   turma                 Turma        @relation(fields: [turma_id], references: [id], onDelete: Cascade)
+  turmas_vinculadas     TrabalhoTurma[]
   equipes               Equipe[]
   repositorios          Repositorio[]
   entregas              Entrega[]
   entregas_agendadas    EntregaAgendada[]
 
   @@map("trabalhos")
+}
+
+model TrabalhoTurma {
+  trabalho_id Int
+  turma_id Int
+  trabalho Trabalho @relation(fields: [trabalho_id], references: [id], onDelete: Cascade)
+  turma Turma @relation(fields: [turma_id], references: [id], onDelete: Cascade)
+
+  @@id([trabalho_id, turma_id])
+  @@index([turma_id])
+  @@map("trabalho_turmas")
 }
 
 /**

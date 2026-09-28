@@ -10,6 +10,7 @@ import { runCongelador } from '../jobs/congelador.js';
 import { logger } from '../lib/logger.js';
 import { serializeBigInt } from '../lib/serializer.js';
 import { docSchema } from '../lib/openapi.js';
+import { idsTurmasDoTrabalho } from '../lib/subturmas.js';
 
 const criarDisciplinaBodySchema = z.object({
   nome: z.string().min(3),
@@ -38,6 +39,7 @@ const importarMatriculasBodySchema = z.object({
 
 const criarTrabalhoBodySchema = z.object({
   turma_id: z.number(),
+  turma_ids: z.array(z.number().int().positive()).min(1).optional(),
   titulo: z.string().min(3),
   descricao_md: z.string(),
   slug: z.string().min(2),
@@ -60,6 +62,7 @@ const criarTrabalhoBodySchema = z.object({
 // pelo mesmo motivo da janela: um PATCH que mexe só numa ponta ainda pode
 // inverter a ordem, então a coerência é checada no handler contra o valor salvo.
 const atualizarTrabalhoBodySchema = z.object({
+  turma_ids: z.array(z.number().int().positive()).min(1).optional(),
   titulo: z.string().min(3).optional(),
   descricao_md: z.string().optional(),
   slug: z.string().min(2).optional(),
@@ -458,7 +461,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     const list = await prisma.trabalho.findMany({
-      include: { turma: true },
+      include: { turma: true, turmas_vinculadas: true },
     });
     return reply.send(list);
   });
@@ -473,7 +476,20 @@ export async function professorRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const schema = criarTrabalhoBodySchema;
 
-    const parsed = schema.parse(request.body);
+    const resultado = schema.safeParse(request.body);
+    if (!resultado.success) {
+      return reply.status(400).send({ error: 'Dados do trabalho inválidos', details: resultado.error.issues });
+    }
+    const parsed = resultado.data;
+    const { turma_ids, ...campos } = parsed;
+    const ids = [...new Set(turma_ids ?? [parsed.turma_id])];
+    if (!ids.includes(parsed.turma_id)) return reply.status(400).send({ error: 'A turma principal deve estar entre as subturmas do trabalho' });
+    const principal = await prisma.turma.findUnique({ where: { id: parsed.turma_id } });
+    if (!principal) return reply.status(400).send({ error: 'Turma principal não encontrada' });
+    const turmas = await prisma.turma.findMany({ where: { id: { in: ids } } });
+    if (turmas.length !== ids.length || turmas.some(t => t.disciplina_id !== principal.disciplina_id || t.periodo !== principal.periodo)) {
+      return reply.status(400).send({ error: 'Selecione subturmas da mesma disciplina e período' });
+    }
 
     const problemaNoTemplate = await checarTemplateNoGithub(parsed.template_repo);
     if (problemaNoTemplate) {
@@ -482,7 +498,10 @@ export async function professorRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      const created = await prisma.trabalho.create({ data: parsed });
+      const created = await prisma.trabalho.create({
+        data: { ...campos, turmas_vinculadas: { create: ids.map(turma_id => ({ turma_id })) } },
+        include: { turmas_vinculadas: true },
+      });
       return reply.status(201).send(created);
     } catch (err: any) {
       if (err.code === 'P2002') {
@@ -503,12 +522,57 @@ export async function professorRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { id: trabalhoId } = trabalhoIdParamsSchema.parse(request.params);
-    const parsed = atualizarTrabalhoBodySchema.parse(request.body);
+    const resultado = atualizarTrabalhoBodySchema.safeParse(request.body);
+    if (!resultado.success) {
+      return reply.status(400).send({ error: 'Dados do trabalho inválidos', details: resultado.error.issues });
+    }
+    const parsed = resultado.data;
+    const { turma_ids, ...campos } = parsed;
 
-    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId } });
+    const trabalho = await prisma.trabalho.findUnique({ where: { id: trabalhoId }, include: { turmas_vinculadas: true } });
     if (!trabalho) {
       reply.status(404).send({ error: 'Trabalho not found' });
       return;
+    }
+
+    let alteracaoTurmas = {};
+    if (turma_ids !== undefined) {
+      const ids = [...new Set(turma_ids)];
+      if (!ids.includes(trabalho.turma_id)) return reply.status(400).send({ error: 'A turma principal não pode ser removida' });
+      const principal = await prisma.turma.findUnique({ where: { id: trabalho.turma_id } });
+      const turmas = await prisma.turma.findMany({ where: { id: { in: ids } } });
+      if (!principal || turmas.length !== ids.length || turmas.some(t => t.disciplina_id !== principal.disciplina_id || t.periodo !== principal.periodo)) {
+        return reply.status(400).send({ error: 'Selecione subturmas da mesma disciplina e período' });
+      }
+      const anteriores = idsTurmasDoTrabalho(trabalho);
+      const removidas = anteriores.filter(id => !ids.includes(id));
+      if (removidas.length) {
+        const afetados = await prisma.matricula.findMany({
+          where: { turma_id: { in: removidas }, usuario: { matriculas: { none: { turma_id: { in: ids } } } } },
+          select: { usuario_id: true },
+        });
+        const usuarios = [...new Set(afetados.map(m => m.usuario_id))];
+        if (usuarios.length) {
+          const [equipes, repos] = await Promise.all([
+            prisma.equipeMembro.count({ where: { usuario_id: { in: usuarios }, equipe: { trabalho_id: trabalhoId } } }),
+            prisma.repositorio.count({ where: { trabalho_id: trabalhoId, usuario_id: { in: usuarios } } }),
+          ]);
+          if (equipes || repos) return reply.status(409).send({ error: `Não é possível remover a subturma: ${usuarios.length} aluno(s) perderiam acesso com equipe ou repositório neste trabalho.` });
+          const solicitacoes = await prisma.solicitacaoEquipe.count({
+            where: { usuario_id: { in: usuarios }, equipe: { trabalho_id: trabalhoId } },
+          });
+          if (solicitacoes) return reply.status(409).send({
+            error: 'Não é possível remover a subturma enquanto alunos dela têm solicitação de entrada pendente neste trabalho.',
+          });
+        }
+      }
+      const adicionar = ids.filter(id => !anteriores.includes(id));
+      if (removidas.length || adicionar.length) {
+        alteracaoTurmas = { turmas_vinculadas: {
+          ...(removidas.length && { deleteMany: { turma_id: { in: removidas } } }),
+          ...(adicionar.length && { create: adicionar.map(turma_id => ({ turma_id })) }),
+        } };
+      }
     }
 
     // A janela é um par: um PATCH que mexe só numa ponta ainda pode inverter a ordem.
@@ -552,7 +616,8 @@ export async function professorRoutes(fastify: FastifyInstance) {
     try {
       const updated = await prisma.trabalho.update({
         where: { id: trabalhoId },
-        data: parsed,
+        data: { ...campos, ...alteracaoTurmas },
+        include: { turmas_vinculadas: true },
       });
       return reply.send(updated);
     } catch (err: any) {
@@ -584,13 +649,17 @@ export async function professorRoutes(fastify: FastifyInstance) {
     const { trabalho_id: trabalhoId } = querySchema.parse(request.query);
     
     const trabalho = await prisma.trabalho.findFirst({
-      where: { id: trabalhoId, turma_id: turmaId },
+      where: { id: trabalhoId, OR: [{ turma_id: turmaId }, { turmas_vinculadas: { some: { turma_id: turmaId } } }] },
     });
     
     if (!trabalho) {
       reply.status(404).send({ error: 'Trabalho not found in this class' });
       return;
     }
+    const matriculasDaTurma = await prisma.matricula.findMany({
+      where: { turma_id: turmaId }, include: { usuario: true },
+    });
+    const alunosDaTurma = new Set(matriculasDaTurma.map(m => m.usuario_id));
     
     const repos = await prisma.repositorio.findMany({
       where: { trabalho_id: trabalhoId },
@@ -620,6 +689,8 @@ export async function professorRoutes(fastify: FastifyInstance) {
     
     // Process matching repositories
     for (const r of repos) {
+      if (r.dono_tipo === 'ALUNO' && !alunosDaTurma.has(r.usuario_id!)) continue;
+      if (r.dono_tipo === 'EQUIPE' && !r.equipe?.membros.some(m => alunosDaTurma.has(m.usuario_id))) continue;
       let donoLabel = '';
       let membros: string[] = [];
       
@@ -669,10 +740,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
 
     // Process students/teams with NO repository yet (sem repo)
     if (trabalho.tipo === 'INDIVIDUAL') {
-      const allStudents = await prisma.matricula.findMany({
-        where: { turma_id: turmaId },
-        include: { usuario: true },
-      });
+      const allStudents = matriculasDaTurma;
       
       for (const m of allStudents) {
         const hasRepo = repos.some(r => r.usuario_id === m.usuario_id);
@@ -698,6 +766,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
       });
 
       for (const team of allTeams) {
+        if (!team.membros.some(m => alunosDaTurma.has(m.usuario_id))) continue;
         const hasRepo = repos.some(r => r.equipe_id === team.id);
         if (!hasRepo) {
           rows.push({
@@ -874,7 +943,7 @@ export async function professorRoutes(fastify: FastifyInstance) {
     if (filters.turma_id) {
       whereClause.repositorio = {
         trabalho: {
-          turma_id: filters.turma_id,
+          OR: [{ turma_id: filters.turma_id }, { turmas_vinculadas: { some: { turma_id: filters.turma_id } } }],
         },
       };
     }
