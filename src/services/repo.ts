@@ -46,7 +46,7 @@ export function sanitizeRepoName(name: string): string {
  *
  * Lança em caso de falha — quem chama (o worker `repo-setup`) cuida do retry.
  */
-async function runPostCreationSequence(repoName: string, studentLogins: string[]) {
+async function runPostCreationSequence(repoName: string, studentGithubIds: bigint[]) {
   const octokit = await getInstallationOctokit();
   const org = config.GITHUB_ORG;
 
@@ -83,7 +83,12 @@ async function runPostCreationSequence(repoName: string, studentLogins: string[]
   }
   
   // 1. Add students as collaborators with push permission
-  for (const login of studentLogins) {
+  for (const githubId of studentGithubIds) {
+    // O login pode ter mudado desde o vínculo com o Crivo. O ID do GitHub é estável.
+    const { data: student } = await withGithubRetry(() =>
+      octokit.rest.users.getById({ account_id: Number(githubId) })
+    );
+    const login = student.login;
     logger.info({ repoName, login }, 'Adding collaborator to repository');
     await withGithubRetry(() => 
       octokit.rest.repos.addCollaborator({
@@ -172,18 +177,21 @@ export async function configureRepository(repoId: number) {
   }
 
   const repoNameOnly = repo.nome_completo.split('/')[1];
-  const studentLogins = repo.dono_tipo === 'ALUNO'
-    ? (repo.usuario ? [repo.usuario.github_login!] : [])
+  const studentGithubIds = repo.dono_tipo === 'ALUNO'
+    ? (repo.usuario ? [repo.usuario.github_id] : [])
     : repo.equipe?.membros
-        .map((m) => m.usuario.github_login)
-        .filter((login): login is string => login !== null) ?? [];
+        .map((m) => m.usuario.github_id) ?? [];
+
+  if (studentGithubIds.some((id) => id === null)) {
+    throw new Error('Integrante sem conta GitHub vinculada');
+  }
 
   await prisma.repositorio.update({
     where: { id: repoId },
     data: { setup_tentativas: { increment: 1 } },
   });
 
-  await runPostCreationSequence(repoNameOnly, studentLogins);
+  await runPostCreationSequence(repoNameOnly, studentGithubIds as bigint[]);
 
   await prisma.repositorio.update({
     where: { id: repoId },

@@ -32,6 +32,9 @@ function octokitBase() {
         getRepoRulesets: vi.fn().mockResolvedValue({ data: [] }),
         createRepoRuleset: vi.fn().mockResolvedValue({}),
       },
+      users: {
+        getById: vi.fn().mockResolvedValue({ data: { id: 201305212, login: 'aluno-dono' } }),
+      },
     },
   };
 }
@@ -51,7 +54,7 @@ describe('configureRepository — proteção da main é best-effort', () => {
       id: 1,
       nome_completo: 'faminas-ads/repo-aluno',
       dono_tipo: 'ALUNO',
-      usuario: { github_login: 'aluno-dono' },
+      usuario: { github_id: 201305212n, github_login: 'aluno-dono' },
       equipe: null,
     } as any);
     vi.mocked(prisma.repositorio.update).mockResolvedValue({} as any);
@@ -66,6 +69,29 @@ describe('configureRepository — proteção da main é best-effort', () => {
       expect.objectContaining({
         data: expect.objectContaining({ setup_status: 'CONFIGURADO', setup_erro: null }),
       }),
+    );
+  });
+
+  it('convida pelo login atual do ID GitHub quando o login salvo mudou', async () => {
+    const octokit = octokitBase();
+    octokit.rest.users.getById.mockResolvedValue({ data: { id: 201305212, login: 'nickolasccruz' } });
+    vi.mocked(getInstallationOctokit).mockResolvedValue(octokit as any);
+    vi.mocked(prisma.repositorio.findUnique).mockResolvedValue({
+      id: 1,
+      nome_completo: 'faminas-ads/repo-equipe',
+      dono_tipo: 'EQUIPE',
+      usuario: null,
+      equipe: { membros: [{ usuario: { github_id: 201305212n, github_login: 'nickinn-ttw' } }] },
+    } as any);
+
+    await configureRepository(1);
+
+    expect(octokit.rest.users.getById).toHaveBeenCalledWith({ account_id: 201305212 });
+    expect(octokit.rest.repos.addCollaborator).toHaveBeenCalledWith({
+      owner: 'faminas-ads', repo: 'repo-equipe', username: 'nickolasccruz', permission: 'push',
+    });
+    expect(prisma.repositorio.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ setup_status: 'CONFIGURADO' }) }),
     );
   });
 
