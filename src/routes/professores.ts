@@ -339,6 +339,53 @@ export async function professorRoutes(fastify: FastifyInstance) {
     return reply.send(serializeBigInt(aluno));
   });
 
+  const trabalhosAlunoParamsSchema = z.object({
+    id: z.coerce.number().int().positive(),
+    turmaId: z.coerce.number().int().positive(),
+  });
+  fastify.get('/prof/alunos/:id/turmas/:turmaId/trabalhos', {
+    schema: {
+      tags: ['professores'], summary: 'Lista trabalhos, entregas e avaliações de um aluno na turma',
+      security: AUTH_SECURITY, params: docSchema(trabalhosAlunoParamsSchema),
+    },
+  }, async (request, reply) => {
+    const params = trabalhosAlunoParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ error: 'Parâmetros inválidos' });
+    const { id, turmaId } = params.data;
+    const matricula = await prisma.matricula.findUnique({
+      where: { usuario_id_turma_id: { usuario_id: id, turma_id: turmaId } },
+    });
+    if (!matricula) return reply.status(404).send({ error: 'Aluno não matriculado nesta turma' });
+    const trabalhos = await prisma.trabalho.findMany({
+      where: { OR: [{ turma_id: turmaId }, { turmas_vinculadas: { some: { turma_id: turmaId } } }] },
+      orderBy: [{ deadline: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true, titulo: true, tipo: true, deadline: true,
+        repositorios: {
+          where: { OR: [
+            { dono_tipo: 'ALUNO', usuario_id: id },
+            { dono_tipo: 'EQUIPE', equipe: { membros: { some: { usuario_id: id } } } },
+          ] },
+          select: {
+            id: true, nome_completo: true, dono_tipo: true,
+            equipe: { select: { nome: true } },
+            _count: { select: { commits: true } },
+            avaliacao: { select: { nota: true, comentario: true, atualizado_em: true } },
+            entregas: {
+              orderBy: [{ congelado_em: 'desc' }, { id: 'desc' }],
+              select: {
+                id: true, repositorio_id: true, trabalho_id: true, entrega_agendada_id: true,
+                tag: true, sha_congelado: true, congelado_em: true,
+                entrega_agendada: { select: { nome: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    return reply.send(trabalhos);
+  });
+
   fastify.patch('/prof/alunos/:id/teste', {
     schema: {
       tags: ['professores'], summary: 'Marca ou desmarca um aluno como conta de teste sem GitHub obrigatório',
