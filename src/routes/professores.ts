@@ -639,17 +639,8 @@ export async function professorRoutes(fastify: FastifyInstance) {
       return;
     }
 
-    // Trocar o tipo com repositórios criados deixaria repos ALUNO num trabalho de
-    // EQUIPE (e vice-versa) — o aluno perderia o acesso ao que já entregou.
-    if (parsed.tipo && parsed.tipo !== trabalho.tipo) {
-      const reposExistentes = await prisma.repositorio.count({ where: { trabalho_id: trabalhoId } });
-      if (reposExistentes > 0) {
-        reply.status(400).send({
-          error: `Cannot change tipo: ${reposExistentes} repository(ies) already created for this trabalho`,
-        });
-        return;
-      }
-    }
+    // Repositórios existentes mantêm dono e histórico. A troca de tipo vale
+    // para novas criações; GET /me/turmas continua encontrando os repos antigos.
 
     // Mesma validação da criação, só quando o template muda.
     if (parsed.template_repo && parsed.template_repo !== trabalho.template_repo) {

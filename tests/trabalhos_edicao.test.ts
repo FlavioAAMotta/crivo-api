@@ -157,7 +157,7 @@ describe('PATCH /prof/trabalhos/:id', () => {
     expect(getInstallationOctokit).not.toHaveBeenCalled();
   });
 
-  it('bloqueia troca de tipo quando já existem repositórios', async () => {
+  it('permite trocar o tipo sem alterar os repositórios existentes', async () => {
     vi.mocked(prisma.repositorio.count).mockResolvedValue(4);
 
     const response = await app.inject({
@@ -167,8 +167,8 @@ describe('PATCH /prof/trabalhos/:id', () => {
       payload: { tipo: 'INDIVIDUAL' },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(prisma.trabalho.update).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(vi.mocked(prisma.trabalho.update).mock.calls[0][0].data).toEqual({ tipo: 'INDIVIDUAL' });
   });
 
   it('permite trocar o tipo enquanto nenhum repositório foi criado', async () => {

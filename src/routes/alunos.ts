@@ -96,9 +96,15 @@ export async function alunoRoutes(fastify: FastifyInstance) {
         trabalhosVistos.add(t.id);
         return true;
       }).map((t) => {
-        const repo = t.tipo === 'INDIVIDUAL'
-          ? t.repositorios.find((r) => r.dono_tipo === 'ALUNO' && r.usuario_id === requesterId)
-          : t.repositorios.find((r) => r.dono_tipo === 'EQUIPE' && r.equipe_id !== null && equipeIds.has(r.equipe_id));
+        const reposDoAluno = t.repositorios.filter((r) =>
+          (r.dono_tipo === 'ALUNO' && r.usuario_id === requesterId) ||
+          (r.dono_tipo === 'EQUIPE' && r.equipe_id !== null && equipeIds.has(r.equipe_id)),
+        );
+        const repoDoTipoAtual = t.tipo === 'INDIVIDUAL'
+          ? reposDoAluno.find((r) => r.dono_tipo === 'ALUNO')
+          : reposDoAluno.find((r) => r.dono_tipo === 'EQUIPE');
+        const repo = repoDoTipoAtual ?? reposDoAluno[0] ?? null;
+        const repositoriosLegados = reposDoAluno.filter((r) => r.id !== repo?.id);
 
         // Um repositório já criado destrava o trabalho mesmo que a janela tenha
         // sido reagendada para o futuro: esconder o enunciado de quem já está
@@ -134,7 +140,14 @@ export async function alunoRoutes(fastify: FastifyInstance) {
             id: repo.id,
             nome_completo: repo.nome_completo,
             github_repo_id: repo.github_repo_id.toString(),
+            dono_tipo: repo.dono_tipo,
           } : null,
+          repositorios_legados: repositoriosLegados.map((r) => ({
+            id: r.id,
+            nome_completo: r.nome_completo,
+            github_repo_id: r.github_repo_id.toString(),
+            dono_tipo: r.dono_tipo,
+          })),
         };
       });
 

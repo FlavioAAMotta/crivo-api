@@ -244,6 +244,10 @@ export async function createRepositoryForStudent(usuarioId: number, trabalhoId: 
     throw new Error('Trabalho not found');
   }
 
+  if (trabalho.tipo === 'EQUIPE') {
+    throw new Error('This trabalho does not accept individual repositories');
+  }
+
   // O trabalho ainda fechado não gera repositório: o repositório é o template
   // do enunciado, criá-lo antes entregaria justamente o que a janela esconde.
   exigirTrabalhoLiberado(trabalho.janela_inicio);
@@ -352,6 +356,10 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   
   if (!trabalho) {
     throw new Error('Trabalho not found');
+  }
+
+  if (trabalho.tipo === 'INDIVIDUAL') {
+    throw new Error('This trabalho does not accept team repositories');
   }
 
   // Mesma trava do individual: a equipe pode ser montada antes da abertura, o
