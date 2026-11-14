@@ -1,5 +1,20 @@
 import { prisma } from '../lib/prisma.js';
 import { idsTurmasDoTrabalho, matriculasDoTrabalho, alunoParticipaDoTrabalho } from '../lib/subturmas.js';
+import { enqueueRepoSetupJob } from '../jobs/queues.js';
+
+async function atualizarColaboradoresDaEquipe(equipeId: number) {
+  const repositorio = await prisma.repositorio.findFirst({
+    where: { equipe_id: equipeId, dono_tipo: 'EQUIPE' },
+    select: { id: true },
+  });
+  if (repositorio) {
+    await prisma.repositorio.update({
+      where: { id: repositorio.id },
+      data: { setup_status: 'PENDENTE', setup_erro: null },
+    });
+    await enqueueRepoSetupJob(repositorio.id);
+  }
+}
 
 /**
  * Creates a new team for a given work (trabalho), adding the creator as the first member.
@@ -130,7 +145,7 @@ export async function listTeamsForTrabalho(trabalhoId: number, requesterId: numb
       lider: equipe.lider,
       membros: equipe.membros.map(m => m.usuario),
       solicitacao_pendente: equipe.solicitacoes.length > 0,
-      pode_solicitar: !formada && equipe.membros.length < trabalho.max_integrantes_equipe,
+      pode_solicitar: equipe.membros.length < trabalho.max_integrantes_equipe,
     };
   });
 }
@@ -160,7 +175,6 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
     throw new Error('Team not found');
   }
 
-  if (equipe.formada_em) throw new TeamError('A equipe já foi finalizada e não aceita novos integrantes', 409);
   if (equipe.membros.length >= equipe.trabalho.max_integrantes_equipe) {
     throw new TeamError(`A equipe atingiu o limite de ${equipe.trabalho.max_integrantes_equipe} integrantes`, 409);
   }
@@ -191,12 +205,14 @@ export async function addTeamMember(equipeId: number, usuarioId: number, request
   if (outraEquipe) throw new TeamError('Student already belongs to another team in this trabalho', 409);
 
   // Add the member
-  return prisma.equipeMembro.create({
+  const membro = await prisma.equipeMembro.create({
     data: {
       equipe_id: equipeId,
       usuario_id: usuarioId,
     },
   });
+  await atualizarColaboradoresDaEquipe(equipeId);
+  return membro;
 }
 
 export async function getMyTeam(trabalhoId: number, usuarioId: number) {
@@ -257,7 +273,6 @@ export async function requestTeamEntry(equipeId: number, requesterId: number) {
     include: { membros: true, trabalho: { include: { turma: { include: { matriculas: true } }, turmas_vinculadas: { include: { turma: { include: { matriculas: true } } } } } } },
   });
   if (!equipe) throw new TeamError('Equipe não encontrada', 404);
-  if (equipe.formada_em) throw new TeamError('A equipe já foi finalizada', 409);
   if (equipe.membros.length >= equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe está completa', 409);
   if (!alunoParticipaDoTrabalho(equipe.trabalho, matriculasDoTrabalho(equipe.trabalho), requesterId)) throw new TeamError('Você não pertence a esta turma', 403);
   if (equipe.membros.some(m => m.usuario_id === requesterId)) throw new TeamError('Você já pertence a esta equipe', 409);
@@ -269,7 +284,8 @@ export async function requestTeamEntry(equipeId: number, requesterId: number) {
 }
 
 export async function decideTeamRequest(solicitacaoId: number, leaderId: number, aceitar: boolean) {
-  return prisma.$transaction(async tx => {
+  let equipeIdAdicionada: number | null = null;
+  const resultado = await prisma.$transaction(async tx => {
     const pedido = await tx.solicitacaoEquipe.findUnique({
       where: { id: solicitacaoId },
       include: { equipe: { include: { membros: true, trabalho: { include: { turmas_vinculadas: true } } } } },
@@ -277,7 +293,6 @@ export async function decideTeamRequest(solicitacaoId: number, leaderId: number,
     if (!pedido) throw new TeamError('Solicitação não encontrada', 404);
     if (pedido.equipe.lider_id !== leaderId) throw new TeamError('Apenas o líder pode responder solicitações', 403);
     if (!aceitar) return tx.solicitacaoEquipe.delete({ where: { id: solicitacaoId } });
-    if (pedido.equipe.formada_em) throw new TeamError('A equipe já foi finalizada', 409);
     if (pedido.equipe.membros.length >= pedido.equipe.trabalho.max_integrantes_equipe) throw new TeamError('A equipe atingiu o limite de integrantes', 409);
     const matriculado = await tx.matricula.count({ where: { usuario_id: pedido.usuario_id, turma_id: { in: idsTurmasDoTrabalho(pedido.equipe.trabalho) } } });
     if (!matriculado) throw new TeamError('O aluno não pertence a este trabalho', 403);
@@ -285,6 +300,9 @@ export async function decideTeamRequest(solicitacaoId: number, leaderId: number,
     if (outraEquipe) throw new TeamError('O aluno já entrou em outra equipe', 409);
     const membro = await tx.equipeMembro.create({ data: { equipe_id: pedido.equipe_id, usuario_id: pedido.usuario_id } });
     await tx.solicitacaoEquipe.deleteMany({ where: { usuario_id: pedido.usuario_id, equipe: { trabalho_id: pedido.equipe.trabalho_id } } });
+    equipeIdAdicionada = pedido.equipe_id;
     return membro;
   });
+  if (aceitar && equipeIdAdicionada !== null) await atualizarColaboradoresDaEquipe(equipeIdAdicionada);
+  return resultado;
 }

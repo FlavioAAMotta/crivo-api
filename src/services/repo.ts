@@ -375,7 +375,8 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   });
   
   if (existingRepo) {
-    throw new Error('Repository already exists for this team and trabalho');
+    await enqueueRepoSetupJob(existingRepo.id);
+    return existingRepo;
   }
   
   if (equipe.membros.length === 0) {
@@ -392,6 +393,31 @@ export async function createRepositoryForTeam(equipeId: number, trabalhoId: numb
   });
   if (equipe.membros.some(m => !vinculo.some(v => v.usuario_id === m.usuario_id))) {
     throw new Error('Integrante não pertence a este trabalho');
+  }
+
+  // Se o líder já havia criado um repositório individual antes de o trabalho
+  // virar em equipe, vincular esse mesmo registro preserva URL, histórico,
+  // entregas e métricas. A sequência de setup sincroniza os colaboradores atuais.
+  const repositorioIndividualDoLider = await prisma.repositorio.findFirst({
+    where: {
+      trabalho_id: trabalhoId,
+      dono_tipo: 'ALUNO',
+      usuario_id: equipe.lider_id,
+      equipe_id: null,
+    },
+  });
+
+  if (repositorioIndividualDoLider) {
+    const repositorioVinculado = await prisma.repositorio.update({
+      where: { id: repositorioIndividualDoLider.id },
+      data: {
+        dono_tipo: 'EQUIPE',
+        usuario_id: null,
+        equipe_id: equipeId,
+      },
+    });
+    await enqueueRepoSetupJob(repositorioVinculado.id);
+    return repositorioVinculado;
   }
   
   // Em trabalhos compartilhados, equipes de subturmas diferentes podem ter o mesmo nome.
